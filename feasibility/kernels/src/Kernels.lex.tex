@@ -7,21 +7,36 @@ inductive{
   name: Phase,
   type_parameters: [],
   parameters: [],
-  constructors: [{name: idle, fields: []}, {name: reading, fields: []}, {name: committing, fields: []}]
+  constructors: [
+    {name: idle, fields: []},
+    {name: reading, fields: []},
+    {name: committing, fields: []}
+  ]
 }
 
 inductive{
   name: Event,
   type_parameters: [],
   parameters: [],
-  constructors: [{name: request, fields: []}, {name: batchEnd, fields: []}, {name: commitOk, fields: []}, {name: commitFail, fields: []}]
+  constructors: [
+    {name: request, fields: []},
+    {name: batchEnd, fields: []},
+    {name: commitOk, fields: []},
+    {name: commitFail, fields: []}
+  ]
 }
 
 inductive{
   name: Action,
   type_parameters: [],
   parameters: [],
-  constructors: [{name: nothing, fields: []}, {name: begin, fields: []}, {name: commit, fields: []}, {name: sendAll, fields: []}, {name: failAll, fields: []}]
+  constructors: [
+    {name: nothing, fields: []},
+    {name: begin, fields: []},
+    {name: commit, fields: []},
+    {name: sendAll, fields: []},
+    {name: failAll, fields: []}
+  ]
 }
 
 definition{
@@ -76,7 +91,11 @@ definition{
   result: Bool,
   body: (match (actionOf phase event)
     | Action.sendAll => (match phase
-      | Phase.committing => (match event | Event.commitOk => true | Event.request => false | Event.batchEnd => false | Event.commitFail => false)
+      | Phase.committing => (match event
+        | Event.commitOk => true
+        | Event.request => false
+        | Event.batchEnd => false
+        | Event.commitFail => false)
       | Phase.idle => false
       | Phase.reading => false)
     | Action.nothing => true
@@ -92,9 +111,93 @@ theorem{
   statement: ((sendAllowed phase event) = true),
   proof: induction{
     branches: [
-      {proof: induction{branches: [{proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: request}, {proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: batchEnd}, {proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: commitOk}, {proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: commitFail}], scrutinee: event}, binders: [], constructor: idle},
-      {proof: induction{branches: [{proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: request}, {proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: batchEnd}, {proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: commitOk}, {proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: commitFail}], scrutinee: event}, binders: [], constructor: reading},
-      {proof: induction{branches: [{proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: request}, {proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: batchEnd}, {proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: commitOk}, {proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: commitFail}], scrutinee: event}, binders: [], constructor: committing}
+      {
+        proof: induction{
+          branches: [
+            {
+              proof: simplify{definitions: [actionOf, sendAllowed]},
+              binders: [],
+              constructor: request
+            },
+            {
+              proof: simplify{definitions: [actionOf, sendAllowed]},
+              binders: [],
+              constructor: batchEnd
+            },
+            {
+              proof: simplify{definitions: [actionOf, sendAllowed]},
+              binders: [],
+              constructor: commitOk
+            },
+            {
+              proof: simplify{definitions: [actionOf, sendAllowed]},
+              binders: [],
+              constructor: commitFail
+            }
+          ],
+          scrutinee: event
+        },
+        binders: [],
+        constructor: idle
+      },
+      {
+        proof: induction{
+          branches: [
+            {
+              proof: simplify{definitions: [actionOf, sendAllowed]},
+              binders: [],
+              constructor: request
+            },
+            {
+              proof: simplify{definitions: [actionOf, sendAllowed]},
+              binders: [],
+              constructor: batchEnd
+            },
+            {
+              proof: simplify{definitions: [actionOf, sendAllowed]},
+              binders: [],
+              constructor: commitOk
+            },
+            {
+              proof: simplify{definitions: [actionOf, sendAllowed]},
+              binders: [],
+              constructor: commitFail
+            }
+          ],
+          scrutinee: event
+        },
+        binders: [],
+        constructor: reading
+      },
+      {
+        proof: induction{
+          branches: [
+            {
+              proof: simplify{definitions: [actionOf, sendAllowed]},
+              binders: [],
+              constructor: request
+            },
+            {
+              proof: simplify{definitions: [actionOf, sendAllowed]},
+              binders: [],
+              constructor: batchEnd
+            },
+            {
+              proof: simplify{definitions: [actionOf, sendAllowed]},
+              binders: [],
+              constructor: commitOk
+            },
+            {
+              proof: simplify{definitions: [actionOf, sendAllowed]},
+              binders: [],
+              constructor: commitFail
+            }
+          ],
+          scrutinee: event
+        },
+        binders: [],
+        constructor: committing
+      }
     ],
     scrutinee: phase
   },
@@ -106,7 +209,6 @@ definition{
   parameters: [code : UInt8],
   result: Phase,
   body: (if (prim equal code (0 : UInt8) : Bool) then (ctor Phase.idle) else (if (prim equal code (1 : UInt8) : Bool) then (ctor Phase.reading) else (ctor Phase.committing))),
-  axioms: [Quot.sound, propext],
   executable: true
 }
 
@@ -115,7 +217,6 @@ definition{
   parameters: [code : UInt8],
   result: Event,
   body: (if (prim equal code (0 : UInt8) : Bool) then (ctor Event.request) else (if (prim equal code (1 : UInt8) : Bool) then (ctor Event.batchEnd) else (if (prim equal code (2 : UInt8) : Bool) then (ctor Event.commitOk) else (ctor Event.commitFail)))),
-  axioms: [Quot.sound, propext],
   executable: true
 }
 
@@ -123,7 +224,10 @@ definition{
   name: encodePhase,
   parameters: [phase : Phase],
   result: UInt8,
-  body: (match phase | Phase.idle => (0 : UInt8) | Phase.reading => (1 : UInt8) | Phase.committing => (2 : UInt8)),
+  body: (match phase
+    | Phase.idle => (0 : UInt8)
+    | Phase.reading => (1 : UInt8)
+    | Phase.committing => (2 : UInt8)),
   executable: true
 }
 
@@ -131,7 +235,12 @@ definition{
   name: encodeAction,
   parameters: [action : Action],
   result: UInt8,
-  body: (match action | Action.nothing => (0 : UInt8) | Action.begin => (1 : UInt8) | Action.commit => (2 : UInt8) | Action.sendAll => (3 : UInt8) | Action.failAll => (4 : UInt8)),
+  body: (match action
+    | Action.nothing => (0 : UInt8)
+    | Action.begin => (1 : UInt8)
+    | Action.commit => (2 : UInt8)
+    | Action.sendAll => (3 : UInt8)
+    | Action.failAll => (4 : UInt8)),
   executable: true
 }
 
@@ -140,7 +249,6 @@ definition{
   parameters: [phase : UInt8, event : UInt8],
   result: (UInt8 * UInt8),
   body: (let p : Phase := (decodePhase phase); (let e : Event := (decodeEvent event); ((encodePhase (nextPhase p e)), (encodeAction (actionOf p e))))),
-  axioms: [Quot.sound, propext],
   executable: true,
   production: {effects: [], targets: [rust-core]}
 }
@@ -180,7 +288,9 @@ definition{
   name: shr,
   parameters: [x : UInt64, n : UInt32],
   result: UInt64,
-  body: (match (prim shift_right x n : (Option UInt64)) | Option.none => (0 : UInt64) | Option.some v => v),
+  body: (match (prim shift_right x n : (Option UInt64))
+    | Option.none => (0 : UInt64)
+    | Option.some v => v),
   axioms: [Quot.sound, propext],
   executable: true
 }
@@ -189,7 +299,9 @@ definition{
   name: shl,
   parameters: [x : UInt64, n : UInt32],
   result: UInt64,
-  body: (match (prim shift_left x n : (Option UInt64)) | Option.none => (0 : UInt64) | Option.some v => v),
+  body: (match (prim shift_left x n : (Option UInt64))
+    | Option.none => (0 : UInt64)
+    | Option.some v => v),
   axioms: [Quot.sound, propext],
   executable: true
 }
@@ -207,14 +319,26 @@ definition{
   name: add32,
   parameters: [x : UInt64, y : UInt64],
   result: UInt64,
-  body: (match (prim checked_add x y : (Option UInt64)) | Option.none => (0 : UInt64) | Option.some v => (prim bit_and v (4294967295 : UInt64) : UInt64)),
+  body: (match (prim checked_add x y : (Option UInt64))
+    | Option.none => (0 : UInt64)
+    | Option.some v => (prim bit_and v (4294967295 : UInt64) : UInt64)),
   axioms: [Quot.sound, propext],
   executable: true
 }
 
 definition{
   name: shaRound,
-  parameters: [a : UInt64, b : UInt64, c : UInt64, d : UInt64, e : UInt64, f : UInt64, g : UInt64, h : UInt64, kw : UInt64],
+  parameters: [
+    a : UInt64,
+    b : UInt64,
+    c : UInt64,
+    d : UInt64,
+    e : UInt64,
+    f : UInt64,
+    g : UInt64,
+    h : UInt64,
+    kw : UInt64
+  ],
   result: (UInt64 * UInt64),
   body: (let s1 : UInt64 := (prim bit_xor (prim bit_xor (rotr32 e (6 : UInt32) (26 : UInt32)) (rotr32 e (11 : UInt32) (21 : UInt32)) : UInt64) (rotr32 e (25 : UInt32) (7 : UInt32)) : UInt64); (let ch : UInt64 := (prim bit_xor (prim bit_and e f : UInt64) (prim bit_and (prim bit_not e : UInt64) g : UInt64) : UInt64); (let t1 : UInt64 := (add32 (add32 (add32 h s1) (prim bit_and ch (4294967295 : UInt64) : UInt64)) kw); (let s0 : UInt64 := (prim bit_xor (prim bit_xor (rotr32 a (2 : UInt32) (30 : UInt32)) (rotr32 a (13 : UInt32) (19 : UInt32)) : UInt64) (rotr32 a (22 : UInt32) (10 : UInt32)) : UInt64); (let mj : UInt64 := (prim bit_xor (prim bit_xor (prim bit_and a b : UInt64) (prim bit_and a c : UInt64) : UInt64) (prim bit_and b c : UInt64) : UInt64); ((add32 t1 (add32 s0 mj)), (add32 d t1))))))),
   axioms: [Quot.sound, propext],
@@ -226,8 +350,9 @@ definition{
   name: startsWith,
   parameters: [raw : Bytes, prefix : Bytes, count : Nat],
   result: Bool,
-  body: (match (prim slice raw 0 count : (Option Bytes)) | Option.none => false | Option.some head => (prim equal head prefix : Bool)),
-  axioms: [Quot.sound, propext],
+  body: (match (prim slice raw 0 count : (Option Bytes))
+    | Option.none => false
+    | Option.some head => (prim equal head prefix : Bool)),
   executable: true
 }
 
@@ -236,7 +361,6 @@ definition{
   parameters: [raw : Bytes],
   result: Nat,
   body: (if (startsWith raw 0x474554202f6665656420485454502f31 16) then 1 else (if (startsWith raw 0x474554202f6865616c74682048545450 16) then 2 else (if (startsWith raw 0x474554202f706f7374732f 11) then 3 else (if (startsWith raw 0x504f5354202f706f7374732048545450 16) then 4 else (if (startsWith raw 0x504f5354202f706f7374732f 12) then 5 else 0))))),
-  axioms: [Quot.sound, propext],
   executable: true,
   production: {effects: [allocation], targets: [rust-std]}
 }
@@ -246,7 +370,6 @@ definition{
   parameters: [pid : Bytes, text : Bytes, created : Bytes, author : Bytes, likes : Bytes],
   result: Bytes,
   body: (prim append (prim append (prim append (prim append (prim append (prim append (prim append (prim append (prim append (prim append 0x7b226964223a pid : Bytes) 0x2c22626f6479223a22 : Bytes) text : Bytes) 0x222c22637265617465645f6174223a22 : Bytes) created : Bytes) 0x222c22617574686f72223a22 : Bytes) author : Bytes) 0x222c226c696b655f636f756e74223a : Bytes) likes : Bytes) 0x7d : Bytes),
-  axioms: [Quot.sound, propext],
   executable: true,
   production: {effects: [allocation], targets: [rust-std]}
 }

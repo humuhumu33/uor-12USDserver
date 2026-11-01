@@ -1,58 +1,39 @@
 #!/bin/bash
-# Runs inside the locked SDK image: build the kernel model and export its production roots.
+# Runs inside the locked SDK image: export one production root, so each root's certificate cost and verdict are its own.
 set -uo pipefail
 cd feasibility/kernels
 out=../out
 lexlean --version | head -1
 lexlean production targets > "$out/targets.json"
-python3 - "$out/targets.json" > request.json <<'PY'
-import json, sys
+ROOT="$1" PKG="$2" TARGET="$3" python3 - "$out/targets.json" > request.json <<'PY'
+import json, os, sys
 digests = {t["id"]: t["digest"] for t in json.load(open(sys.argv[1]))["targets"]}
-roots = [("needsEscape", "kern_escape", "rust-core"), ("postJson", "kern_post_json", "rust-std"),
-         ("routeBytes", "kern_route_bytes", "rust-std"), ("routeWords", "kern_route_words", "rust-core"),
-         ("shaRound", "kern_sha_round", "rust-core"), ("stepCode", "kern_step", "rust-core")]
 print(json.dumps({"spec": "lexlean/production-request/1", "roots": [
-    {"root": "UorKernels.Kernels." + r, "package": {"name": p, "version": "0.1.0"},
-     "targets": [{"id": t, "digest": digests[t]}]} for r, p, t in roots]}))
+    {"root": "UorKernels.Kernels." + os.environ["ROOT"], "package": {"name": os.environ["PKG"], "version": "0.1.0"},
+     "targets": [{"id": os.environ["TARGET"], "digest": digests[os.environ["TARGET"]]}]}]}))
 PY
-code=1
-for attempt in 1 2 3 4 5 6 7 8 9 10 11 12; do
-  lexlean lock > /dev/null
-  lexlean fmt > /dev/null
-  lexlean check || exit 0
-  start=$(date +%s)
-  lexlean --diagnostic-format json production build --request request.json > "$out/production.json" 2> "$out/production.err"
-  code=$?
-  echo "attempt $attempt: production build exit $code in $(( $(date +%s) - start )) s"
-  [ "$code" = 0 ] && break
-  python3 ../fix_axioms.py "$out/production.json" src/Kernels.lex.tex || break
-done
-cp src/Kernels.lex.tex lexlean.lock "$out/"
-head -c 1500 "$out/production.json"
-echo
-tail -c 1500 "$out/production.err"
+lexlean lock > /dev/null
+lexlean check || exit 0
+start=$(date +%s)
+lexlean --diagnostic-format json production build --request request.json > "$out/production.json" 2> "$out/production.err"
+code=$?
+echo "RESULT root=$1 target=$3 exit=$code seconds=$(( $(date +%s) - start )) memory_peak_mb=$(( $(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo 0) / 1048576 ))"
+python3 - "$out/production.json" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+for x in d.get("diagnostics", []):
+    print("DIAG", x["code"], x["message"][:900])
+print("keys", sorted(d.keys()), "artifacts", json.dumps(d.get("artifacts"))[:600])
+PY
+tail -c 800 "$out/production.err"
 [ "$code" = 0 ] || exit 0
-bundle=$(python3 -c "
-import json,sys
-d=json.load(open('$out/production.json'))
-def walk(o):
-    if isinstance(o,dict):
-        for k,v in o.items():
-            if 'bundle' in k and isinstance(v,str):
-                print(v); sys.exit()
-            walk(v)
-    elif isinstance(o,list):
-        for v in o:
-            walk(v)
-walk(d)
-")
-echo "bundle: $bundle"
-cp -r "$bundle" "$out/bundle" || find . -name lib.rs | head
-find "$out/bundle" -maxdepth 4 | head -30
-for f in $(find "$out/bundle" -name lib.rs); do
-  echo "=== $f ($(wc -l < "$f") lines)"
-  grep -n "pub fn run" -A3 "$f"
-done
-f=$(find "$out/bundle" -path '*kern_step*' -name lib.rs | head -1)
-[ -n "$f" ] && { echo "=== tail of step"; tail -60 "$f"; }
+find . -name lib.rs -newer request.json | head -5
+pkg_dir=$(find . -type d -name "$2" | head -1)
+echo "package dir: $pkg_dir"
+mkdir -p "$out/pkg"
+cp -r "$pkg_dir" "$out/pkg/$2"
+f="$out/pkg/$2/src/lib.rs"
+echo "=== $f ($(wc -l < "$f") lines)"
+grep -n "pub fn run" -A3 "$f"
+tail -45 "$f"
 exit 0
