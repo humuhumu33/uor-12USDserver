@@ -25,7 +25,8 @@ jobs:
           nproc
           free -m | head -2
           sudo apt-get update -qq
-          sudo apt-get install -y -qq liburing-dev sqlite3 jq build-essential > /dev/null
+          sudo apt-get install -y -qq liburing-dev sqlite3 jq build-essential linux-tools-common "linux-tools-$(uname -r)" > /dev/null || sudo apt-get install -y -qq liburing-dev sqlite3 jq build-essential > /dev/null
+          sudo sysctl -q -w kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0
           sudo sysctl -q -w fs.nr_open=2097152 net.ipv4.ip_local_port_range="1024 65000"
           # The box has no conntrack table, and this runner's Docker rules would add one.
           sudo iptables -t raw -A PREROUTING -i lo -j NOTRACK
@@ -65,9 +66,10 @@ jobs:
         shell: bash
         run: |
           sudo prlimit --pid $$ --nofile=1048576:1048576
-          for users in 20000 60000 120000; do
+          # Interleaved twice at the top load, so drift on this machine hits both servers.
+          for users in 120000 120000; do
             for server in ours control; do
               echo "=== $server at $users users"
-              bash rig/measure.sh "$server" "$users" 40 90 "$RUNNER_TEMP/challenge" "$PWD/rig"
+              PROFILE=1 bash rig/measure.sh "$server" "$users" 40 120 "$RUNNER_TEMP/challenge" "$PWD/rig"
             done
           done

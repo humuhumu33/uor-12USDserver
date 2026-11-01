@@ -10,6 +10,7 @@
 #include <netinet/tcp.h>
 #include <poll.h>
 #include <pthread.h>
+#include <signal.h>
 #include <sys/eventfd.h>
 #include <sys/mman.h>
 #include <sys/resource.h>
@@ -1615,9 +1616,126 @@ static void listen_all(const char *host, int port) {
     }
 }
 
+/* ---- profile training, used only by build.sh ------------------------------------------- */
+
+static void train_database(const char *path) {
+    sqlite3 *d;
+    if (sqlite3_open(path, &d) != SQLITE_OK) die("training database");
+    const char *sql =
+        "PRAGMA journal_mode = WAL;"
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, username TEXT NOT NULL UNIQUE, created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')));"
+        "CREATE TABLE posts (id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), body TEXT NOT NULL CHECK (length(body) BETWEEN 1 AND 500), created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')));"
+        "CREATE TABLE likes (user_id INTEGER NOT NULL REFERENCES users(id), post_id INTEGER NOT NULL REFERENCES posts(id), created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')), PRIMARY KEY (user_id, post_id));"
+        "CREATE INDEX posts_created_at_id_idx ON posts (created_at DESC, id DESC);"
+        "CREATE INDEX posts_user_id_idx ON posts (user_id);"
+        "CREATE INDEX likes_post_id_idx ON likes (post_id);"
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 5000) INSERT INTO users (id, username) SELECT i, 'user' || i FROM n;"
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50000) INSERT INTO posts (id, user_id, body, created_at) SELECT i, 1 + i % 5000, 'user' || i || ' says hi at 2026-11-01T21:50:40.123Z (VU ' || i || ', iter 3)', strftime('%Y-%m-%dT%H:%M:%fZ', '2026-01-01', '+' || i || ' seconds') FROM n;"
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 200000) INSERT OR IGNORE INTO likes (user_id, post_id) SELECT 1 + i % 5000, 1 + (i * 7919) % 50000 FROM n;"
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 3000) INSERT OR IGNORE INTO likes (user_id, post_id) SELECT 1 + i % 5000, 50000 - i % 20 FROM n;";
+    char *error = 0;
+    if (sqlite3_exec(d, sql, 0, 0, &error) != SQLITE_OK) {
+        fprintf(stderr, "training database: %s\n", error);
+        exit(1);
+    }
+    sqlite3_close(d);
+}
+
+static size_t b64_encode(const uint8_t *in, size_t n, char *out) {
+    const char *alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    size_t w = 0;
+    uint32_t acc = 0;
+    int bits = 0;
+    for (size_t i = 0; i < n; i++) {
+        acc = acc << 8 | in[i];
+        bits += 8;
+        while (bits >= 6) {
+            bits -= 6;
+            out[w++] = alphabet[(acc >> bits) & 63];
+        }
+    }
+    if (bits) out[w++] = alphabet[(acc << (6 - bits)) & 63];
+    return w;
+}
+
+static size_t train_token(int user, char *out) {
+    const char *head = "{\"alg\":\"HS256\",\"typ\":\"JWT\"}";
+    char payload[128];
+    int p = snprintf(payload, sizeof payload, "{\"sub\":\"%d\",\"username\":\"user%d\",\"iat\":1700000000,\"exp\":4000000000}", user, user);
+    size_t n = b64_encode((const uint8_t *)head, strlen(head), out);
+    out[n++] = '.';
+    n += b64_encode((const uint8_t *)payload, (size_t)p, out + n);
+    uint8_t signature[32];
+    hmac((const uint8_t *)out, n, signature);
+    out[n++] = '.';
+    n += b64_encode(signature, 32, out + n);
+    return n;
+}
+
+static void train_client(int port, int total) {
+    enum { CLIENTS = 256 };
+    int fds[CLIENTS];
+    static char buffer[262144];
+    usleep(200000);
+    for (int i = 0; i < CLIENTS; i++) {
+        fds[i] = socket(AF_INET, SOCK_STREAM, 0);
+        struct sockaddr_in a = {.sin_family = AF_INET, .sin_port = htons((uint16_t)port), .sin_addr.s_addr = htonl(INADDR_LOOPBACK)};
+        if (connect(fds[i], (struct sockaddr *)&a, sizeof a)) die("training connect");
+    }
+    for (int sent = 0; sent < total;) {
+        for (int i = 0; i < CLIENTS; i++, sent++) {
+            char text[2048], token[512];
+            int n, r = sent % 100;
+            int post = 1 + (sent * 31) % 50000;
+            size_t t;
+            const char *common = "Host: bench\r\nUser-Agent: k6/1.0 (https://k6.io/)\r\n";
+            if (r < 46) {
+                n = snprintf(text, sizeof text, "GET /feed HTTP/1.1\r\n%s\r\n", common);
+            } else if (r < 92) {
+                n = snprintf(text, sizeof text, "GET /posts/%d HTTP/1.1\r\n%s\r\n", post, common);
+            } else if (r < 99) {
+                t = train_token(1 + sent % 5000, token);
+                n = snprintf(text, sizeof text, "POST /posts/%d/like HTTP/1.1\r\n%sAuthorization: Bearer %.*s\r\nContent-Type: application/json\r\nContent-Length: 0\r\n\r\n", 50000 - sent % 20, common, (int)t, token);
+            } else {
+                t = train_token(1 + sent % 5000, token);
+                char body[128];
+                int b = snprintf(body, sizeof body, "{\"body\":\"user says hi at 2026-11-01T21:50:40.123Z (VU %d, iter 1)\"}", sent);
+                n = snprintf(text, sizeof text, "POST /posts HTTP/1.1\r\n%sAuthorization: Bearer %.*s\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n%s", common, (int)t, token, b, body);
+            }
+            if (send(fds[i], text, (size_t)n, MSG_NOSIGNAL) != n) die("training send");
+        }
+        for (int i = 0; i < CLIENTS; i++) {
+            size_t have = 0, need = 0;
+            for (;;) {
+                ssize_t got = recv(fds[i], buffer + have, sizeof buffer - have, 0);
+                if (got <= 0) die("training recv");
+                have += (size_t)got;
+                char *end = memmem(buffer, have, "\r\n\r\n", 4);
+                if (!end) continue;
+                size_t length_len;
+                const char *length = find_header(buffer, end + 2, "content-length", 14, &length_len);
+                need = (size_t)(end + 4 - buffer) + (length ? strtoul(length, NULL, 10) : 0);
+                if (have >= need) break;
+            }
+        }
+    }
+    kill(getppid(), SIGTERM);
+    _exit(0);
+}
+
+static void train_stop(int signal_number) {
+    (void)signal_number;
+    exit(0);
+}
+
 int main(void) {
     const char *path = getenv("SQLITE_PATH"), *secret = getenv("JWT_SECRET"), *host = getenv("HOST"), *port = getenv("PORT");
+    const char *train = getenv("SERVER_PROFILE_TRAINING");
     if (!path || !secret) die("SQLITE_PATH and JWT_SECRET are required");
+    if (train) {
+        train_database(path);
+        signal(SIGTERM, train_stop);
+    }
     struct rlimit nofile;
     getrlimit(RLIMIT_NOFILE, &nofile);
     nofile.rlim_cur = nofile.rlim_max;
@@ -1636,6 +1754,7 @@ int main(void) {
     }
     response_at = (char *)arenas[0].data;
     listen_all(host ? host : "127.0.0.1", port ? atoi(port) : 3000);
+    if (train && fork() == 0) train_client(port ? atoi(port) : 3000, atoi(train));
     wake_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
     ring_setup(0);
     ring_count = 1;

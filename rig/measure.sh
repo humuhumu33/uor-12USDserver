@@ -52,6 +52,11 @@ taskset -c 1-3 "$rig/loadgen" "$port" "$users" "$ramp" "$hold" "$challenge/token
 load=$!
 sleep "$ramp"
 usage_start=$(awk '/usage_usec/ {print $2}' "$cgroup/cpu.stat")
+if [ "${PROFILE:-0}" = 1 ] && command -v perf > /dev/null; then
+  # All of the server's threads over the middle of the hold.
+  pid=$(head -1 "$cgroup/cgroup.procs")
+  (sleep 20; sudo perf record -q -F 1999 -g -p "$pid" -o "/tmp/perf-$unit.data" -- sleep 30 > /dev/null 2>&1) &
+fi
 sleep "$hold"
 usage_end=$(awk '/usage_usec/ {print $2}' "$cgroup/cpu.stat")
 peak=$(cat "$cgroup/memory.peak")
@@ -59,7 +64,13 @@ current=$(cat "$cgroup/memory.current")
 available=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
 sockstat=$(awk '/^TCP:/ {print $11}' /proc/net/sockstat)
 wait "$load"
-grep -E 'HOLD|WINDOW' "/tmp/load-$unit.log" | tail -6
+grep -E 'HOLD|WINDOW' "/tmp/load-$unit.log" | tail -10
+if [ -f "/tmp/perf-$unit.data" ]; then
+  echo "PROFILE $unit"
+  sudo perf report -i "/tmp/perf-$unit.data" --stdio --no-children --sort sym -g none --percent-limit 0.7 2> /dev/null | grep -E '^ +[0-9]' | head -45
+  sudo perf report -i "/tmp/perf-$unit.data" --stdio --no-children --sort dso -g none 2> /dev/null | grep -E '^ +[0-9]' | head -5
+  echo "PROFILE end"
+fi
 line=$(grep LOAD "/tmp/load-$unit.log")
 echo "$line"
 requests=$(echo "$line" | sed -E 's/.* requests=([0-9]+).*/\1/')
