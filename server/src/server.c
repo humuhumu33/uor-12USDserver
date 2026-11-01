@@ -594,7 +594,7 @@ static int batch_end(void) {
     return -1;
 }
 
-typedef struct { uint64_t type; const uint8_t *p; } Column;
+typedef struct { uint64_t type; const uint8_t *p; } RowField;
 
 static inline const uint8_t *read_varint(const uint8_t *p, const uint8_t *end, uint64_t *value) {
     uint64_t x = 0;
@@ -616,7 +616,7 @@ static inline uint32_t serial_length(uint64_t type) {
     return type < 12 ? lengths[type] : (uint32_t)((type - 12) / 2);
 }
 
-static inline int decode_record(const uint8_t *record, uint32_t n, int count, Column *columns) {
+static inline int decode_record(const uint8_t *record, uint32_t n, int count, RowField *columns) {
     const uint8_t *end = record + n;
     uint64_t header;
     const uint8_t *h = read_varint(record, end, &header);
@@ -632,7 +632,7 @@ static inline int decode_record(const uint8_t *record, uint32_t n, int count, Co
     return body <= end ? 0 : -1;
 }
 
-static inline int64_t column_int(const Column *c) {
+static inline int64_t column_int(const RowField *c) {
     const uint8_t *p = c->p;
     switch (c->type) {
     case 1: return (int8_t)p[0];
@@ -709,7 +709,7 @@ static int count_likes(const int64_t *ascending, int count, int64_t *likes) {
         const uint8_t *record;
         uint32_t n;
         if (cursor_record(cur_likes, &record, &n)) return -1;
-        Column column;
+        RowField column;
         if (decode_record(record, n, 1, &column)) return -1;
         int64_t post = column_int(&column);
         while (at < count && ascending[at] < post) at++;
@@ -850,7 +850,7 @@ static void respond_error(Request *r, int which) {
 }
 
 /* Post object keys in their fixed order. */
-static char *put_post(char *o, int64_t id, const Column *post, const Column *author, int64_t likes) {
+static char *put_post(char *o, int64_t id, const RowField *post, const RowField *author, int64_t likes) {
     o = PUT(o, "{\"id\":");
     o = put_int(o, id);
     o = PUT(o, ",\"body\":\"");
@@ -865,7 +865,7 @@ static char *put_post(char *o, int64_t id, const Column *post, const Column *aut
     return o;
 }
 
-static int load_author(int64_t user, Column *author) {
+static int load_author(int64_t user, RowField *author) {
     if (seek_row(cur_users, user)) return -1;
     const uint8_t *record;
     uint32_t n;
@@ -882,7 +882,7 @@ static int run_feed(Request *r) {
         const uint8_t *record;
         uint32_t n;
         if (cursor_record(cur_time, &record, &n)) return -1;
-        Column columns[3];
+        RowField columns[3];
         if (decode_record(record, n, 3, columns)) return -1;
         ids[count++] = column_int(&columns[2]);
         int rc = sqlite3BtreeNext(cur_time, 0);
@@ -912,7 +912,7 @@ static int run_feed(Request *r) {
         const uint8_t *record;
         uint32_t n;
         if (cursor_record(cur_posts, &record, &n)) return -1;
-        Column post[4], author[2];
+        RowField post[4], author[2];
         if (decode_record(record, n, 4, post) || load_author(column_int(&post[1]), author)) return -1;
         int at = 0;
         while (ascending[at] != ids[i]) at++;
@@ -936,7 +936,7 @@ static int run_post(Request *r) {
     const uint8_t *record;
     uint32_t n;
     if (cursor_record(cur_posts, &record, &n)) return -1;
-    Column post[4], author[2];
+    RowField post[4], author[2];
     if (decode_record(record, n, 4, post) || load_author(column_int(&post[1]), author)) return -1;
     int64_t likes = 0;
     if (count_likes(&r->id, 1, &likes)) return -1;
