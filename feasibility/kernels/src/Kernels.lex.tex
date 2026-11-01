@@ -309,6 +309,7 @@ definition{
   parameters: [octet : UInt8],
   result: Bool,
   body: (if (prim equal (prim bit_and octet (224 : UInt8) : UInt8) (0 : UInt8) : Bool) then true else (if (prim equal octet (34 : UInt8) : Bool) then true else (prim equal octet (92 : UInt8) : Bool))),
+  axioms: [Quot.sound, propext],
   executable: true,
   production: {effects: [], targets: [rust-core]}
 }
