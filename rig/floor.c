@@ -13,7 +13,8 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#define ENTRIES 65536
+#define ENTRIES 4096
+#define COMPLETIONS 65536
 #define BUFFERS 4096
 #define BUFFER_SIZE 2048
 #define GROUP 1
@@ -69,7 +70,7 @@ int main(int argc, char **argv) {
     struct rlimit nofile = {1048576, 1048576};
     setrlimit(RLIMIT_NOFILE, &nofile);
     build_feed();
-    struct io_uring_params params = {.flags = IORING_SETUP_CQSIZE | IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN, .cq_entries = ENTRIES * 8};
+    struct io_uring_params params = {.flags = IORING_SETUP_CQSIZE | IORING_SETUP_SINGLE_ISSUER | IORING_SETUP_DEFER_TASKRUN, .cq_entries = COMPLETIONS};
     int rc = io_uring_queue_init_params(ENTRIES, &ring, &params);
     if (rc < 0) {
         fprintf(stderr, "io_uring_queue_init: %s\n", strerror(-rc));
