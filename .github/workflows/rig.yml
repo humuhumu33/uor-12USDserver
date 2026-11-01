@@ -1,0 +1,64 @@
+name: load-rig
+on:
+  push:
+    branches: ['server/users-held']
+    paths: ['rig/**', '.github/workflows/rig.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  CHALLENGE_COMMIT: c7764b60
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        server: [floor, control]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Prepare the machine
+        shell: bash
+        run: |
+          uname -r
+          grep -m1 'model name' /proc/cpuinfo
+          nproc
+          free -m | head -2
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq liburing-dev sqlite3 jq build-essential > /dev/null
+          sudo sysctl -q -w fs.nr_open=2097152 net.ipv4.ip_local_port_range="1024 65000"
+          # The box has no conntrack table, and this runner's Docker rules would add one.
+          sudo iptables -t raw -A PREROUTING -i lo -j NOTRACK
+          sudo iptables -t raw -A OUTPUT -o lo -j NOTRACK
+          ulimit -Hn
+      - name: Build the rig and the seed
+        shell: bash
+        run: |
+          gcc -O2 -o rig/loadgen rig/loadgen.c -lm
+          gcc -O2 -o rig/floor rig/floor.c -luring
+          git clone -q https://github.com/arjaythedev/twelve-dollar-server-challenge.git "$RUNNER_TEMP/challenge"
+          cd "$RUNNER_TEMP/challenge"
+          git checkout -q "$CHALLENGE_COMMIT"
+          bash seed/make-seed.sh > /dev/null 2>&1
+          ls -la seed/feed.db
+          jq -r '.[].token' seed/tokens.json > tokens.txt
+          wc -l tokens.txt
+      - name: Build the control
+        if: matrix.server == 'control'
+        shell: bash
+        run: |
+          cd "$RUNNER_TEMP/challenge/submissions/c-iouring-pavlyhalim"
+          sudo bash install.sh > /dev/null 2>&1
+          bash build.sh 2>&1 | tail -3
+      - name: Measure ${{ matrix.server }}
+        shell: bash
+        run: |
+          sudo bash -c 'ulimit -Hn 1048576' || true
+          for users in 20000 60000 120000; do
+            echo "=== ${{ matrix.server }} at $users users"
+            sudo prlimit --pid $$ --nofile=1048576:1048576
+            bash rig/measure.sh "${{ matrix.server }}" "$users" 40 90 "$RUNNER_TEMP/challenge" "$PWD/rig"
+          done
