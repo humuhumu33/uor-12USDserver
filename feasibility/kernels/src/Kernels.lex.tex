@@ -70,15 +70,31 @@ definition{
   executable: true
 }
 
+definition{
+  name: sendAllowed,
+  parameters: [phase : Phase, event : Event],
+  result: Bool,
+  body: (match (actionOf phase event)
+    | Action.sendAll => (match phase
+      | Phase.committing => (match event | Event.commitOk => true | Event.request => false | Event.batchEnd => false | Event.commitFail => false)
+      | Phase.idle => false
+      | Phase.reading => false)
+    | Action.nothing => true
+    | Action.begin => true
+    | Action.commit => true
+    | Action.failAll => true),
+  executable: true
+}
+
 theorem{
   name: send_only_after_commit,
   parameters: [phase : Phase, event : Event],
-  statement: (((actionOf phase event) = (ctor Action.sendAll)) -> ((phase = (ctor Phase.committing)) /\ (event = (ctor Event.commitOk)))),
+  statement: ((sendAllowed phase event) = true),
   proof: induction{
     branches: [
-      {proof: induction{branches: [{proof: simplify{definitions: [actionOf]}, binders: [], constructor: request}, {proof: simplify{definitions: [actionOf]}, binders: [], constructor: batchEnd}, {proof: simplify{definitions: [actionOf]}, binders: [], constructor: commitOk}, {proof: simplify{definitions: [actionOf]}, binders: [], constructor: commitFail}], scrutinee: event}, binders: [], constructor: idle},
-      {proof: induction{branches: [{proof: simplify{definitions: [actionOf]}, binders: [], constructor: request}, {proof: simplify{definitions: [actionOf]}, binders: [], constructor: batchEnd}, {proof: simplify{definitions: [actionOf]}, binders: [], constructor: commitOk}, {proof: simplify{definitions: [actionOf]}, binders: [], constructor: commitFail}], scrutinee: event}, binders: [], constructor: reading},
-      {proof: induction{branches: [{proof: simplify{definitions: [actionOf]}, binders: [], constructor: request}, {proof: simplify{definitions: [actionOf]}, binders: [], constructor: batchEnd}, {proof: simplify{definitions: [actionOf]}, binders: [], constructor: commitOk}, {proof: simplify{definitions: [actionOf]}, binders: [], constructor: commitFail}], scrutinee: event}, binders: [], constructor: committing}
+      {proof: induction{branches: [{proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: request}, {proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: batchEnd}, {proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: commitOk}, {proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: commitFail}], scrutinee: event}, binders: [], constructor: idle},
+      {proof: induction{branches: [{proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: request}, {proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: batchEnd}, {proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: commitOk}, {proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: commitFail}], scrutinee: event}, binders: [], constructor: reading},
+      {proof: induction{branches: [{proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: request}, {proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: batchEnd}, {proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: commitOk}, {proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: commitFail}], scrutinee: event}, binders: [], constructor: committing}
     ],
     scrutinee: phase
   },

@@ -57,7 +57,7 @@ def table(name, result, prefix, rows):
 
 def event_cases(phase):
     arms = ", ".join(
-        "{proof: simplify{definitions: [actionOf]}, binders: [], constructor: " + e + "}" for e in EVENTS
+        "{proof: simplify{definitions: [actionOf, sendAllowed]}, binders: [], constructor: " + e + "}" for e in EVENTS
     )
     return (
         "{proof: induction{branches: [" + arms + "], scrutinee: event}, binders: [], constructor: " + phase + "}"
@@ -141,8 +141,16 @@ SOURCE = (
                     ("committing", ["nothing", "nothing", "sendAll", "failAll"]),
                 ],
             ),
+            "definition{\n  name: sendAllowed,\n  parameters: [phase : Phase, event : Event],\n  result: Bool,\n"
+            "  body: (match (actionOf phase event)\n"
+            "    | Action.sendAll => (match phase\n"
+            "      | Phase.committing => (match event | Event.commitOk => true | Event.request => false | Event.batchEnd => false | Event.commitFail => false)\n"
+            "      | Phase.idle => false\n"
+            "      | Phase.reading => false)\n"
+            "    | Action.nothing => true\n    | Action.begin => true\n    | Action.commit => true\n    | Action.failAll => true),\n"
+            "  executable: true\n}\n",
             "theorem{\n  name: send_only_after_commit,\n  parameters: [phase : Phase, event : Event],\n"
-            "  statement: (((actionOf phase event) = (ctor Action.sendAll)) -> ((phase = (ctor Phase.committing)) /\\ (event = (ctor Event.commitOk)))),\n"
+            "  statement: ((sendAllowed phase event) = true),\n"
             "  proof: induction{\n    branches: [\n      "
             + ",\n      ".join(event_cases(p) for p in ["idle", "reading", "committing"])
             + "\n    ],\n    scrutinee: phase\n  },\n  axioms: [propext]\n}\n",
