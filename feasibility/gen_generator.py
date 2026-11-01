@@ -9,7 +9,7 @@ root = pathlib.Path(sys.argv[3])
 
 line = b"/* padding standing in for emitted server source, which is about this dense. */\n"
 text = b"int main(void) { return 42; }\n"
-text += (line * (size // len(line) + 1))[: max(0, size - len(text))]
+text += line * max(0, (size - len(text)) // len(line))
 parts = [text[i : i + chunk] for i in range(0, len(text), chunk)]
 
 # Sixteen appends per definition keep the nesting under the semantic-module JSON recursion limit.

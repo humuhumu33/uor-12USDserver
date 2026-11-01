@@ -41,5 +41,30 @@ wc -c "$lib"
 grep -n "pub fn run" -A3 "$lib"
 grep -n "pub struct Bytes" -A3 "$lib" | head -8
 grep -n "pub fn lit\|pub fn as_slice\|impl Bytes" "$lib" | head -8
-cat "$pkg/Cargo.toml" | head -20
+# The whole chain: compile the generated generator, run it, compile what it wrote, run that.
+mkdir -p /tmp/host/src
+abs=$(cd "$pkg" && pwd)
+printf '[package]
+name = "host"
+version = "0.1.0"
+edition = "2021"
+[dependencies]
+kern_emit = { path = "%s" }
+[workspace]
+' "$abs" > /tmp/host/Cargo.toml
+printf 'fn main() {
+    let source = kern_emit::run(kern_emit::Bytes::lit(b""));
+    std::fs::write(std::env::args().nth(1).unwrap(), source.octets()).unwrap();
+}
+' > /tmp/host/src/main.rs
+start=$(date +%s)
+(cd /tmp/host && CARGO_HOME=/tmp/cargo CARGO_TARGET_DIR=/tmp/target cargo build --release --offline 2>&1 | tail -2)
+echo "generator compile seconds=$(( $(date +%s) - start )) binary_bytes=$(wc -c < /tmp/target/release/host)"
+start_ns=$(date +%s%N)
+/tmp/target/release/host /tmp/emitted.c
+echo "generator run ms=$(( ($(date +%s%N) - start_ns) / 1000000 )) emitted_bytes=$(wc -c < /tmp/emitted.c)"
+cc -O2 /tmp/emitted.c -o /tmp/emitted
+echo "cc exit $?"
+/tmp/emitted
+echo "EMITTED program exit $? (expected 42)"
 exit 0
