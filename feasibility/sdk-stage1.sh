@@ -12,6 +12,24 @@ print(json.dumps({"spec": "lexlean/production-request/1", "roots": [
     {"root": "UorKernels.Kernels." + os.environ["ROOT"], "package": {"name": os.environ["PKG"], "version": "0.1.0"},
      "targets": [{"id": os.environ["TARGET"], "digest": digests[os.environ["TARGET"]]}]}]}))
 PY
+# LexLean certifies every production root the project declares, so keep only the root under test.
+ROOT="$1" python3 - <<'PY2'
+import os, re
+path = "src/Kernels.lex.tex"
+source = open(path).read()
+blocks = re.split(r"(?=
+definition\{)", source)
+kept = []
+for block in blocks:
+    name = re.search(r"name: (\w+),", block)
+    if name and name.group(1) != os.environ["ROOT"]:
+        block = re.sub(r",
+\s*production: \{[^}]*\}", "", block)
+    kept.append(block)
+open(path, "w", newline="
+").write("".join(kept))
+PY2
+grep -c "production:" src/Kernels.lex.tex
 lexlean lock > /dev/null
 lexlean check || exit 0
 start=$(date +%s)
