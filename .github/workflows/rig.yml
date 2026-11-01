@@ -2,7 +2,7 @@ name: load-rig
 on:
   push:
     branches: ['server/users-held']
-    paths: ['rig/**', '.github/workflows/rig.yml']
+    paths: ['rig/**', 'server/**', '.github/workflows/rig.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -10,7 +10,7 @@ env:
   CHALLENGE_COMMIT: c7764b60
 jobs:
   measure:
-    # One job, so the floor and the control share a machine. Runners differ between jobs.
+    # One job, so every server shares a machine. Runners differ between jobs.
     runs-on: ubuntu-24.04
     timeout-minutes: 75
     steps:
@@ -42,6 +42,19 @@ jobs:
           ls -la seed/feed.db
           jq -r '.[].token' seed/tokens.json > tokens.txt
           wc -l tokens.txt
+      - name: Build our server
+        shell: bash
+        run: |
+          sudo bash server/install.sh
+          bash server/build.sh 2>&1 | grep -v 'sqlite3.c' | tail -30
+          ls -la server/bin/server
+      - name: The 42 tests
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/challenge/submissions/ours-under-test"
+          cp -r server/. "$RUNNER_TEMP/challenge/submissions/ours-under-test/"
+          cd "$RUNNER_TEMP/challenge"
+          bash test/run.sh submissions/ours-under-test 2>&1 | tail -40
       - name: Build the control
         shell: bash
         run: |
@@ -53,7 +66,7 @@ jobs:
         run: |
           sudo prlimit --pid $$ --nofile=1048576:1048576
           for users in 20000 60000 120000; do
-            for server in floor control; do
+            for server in ours control; do
               echo "=== $server at $users users"
               bash rig/measure.sh "$server" "$users" 40 90 "$RUNNER_TEMP/challenge" "$PWD/rig"
             done

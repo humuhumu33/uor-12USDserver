@@ -18,6 +18,9 @@ base_sockstat=$(awk '/^TCP:/ {print $11}' /proc/net/sockstat)
 if [ "$name" = floor ]; then
   command=("$rig/floor" "$port")
   limit=1048576
+elif [ "$name" = ours ]; then
+  command=(/bin/bash "$rig/../server/start.sh")
+  limit=65535
 else
   command=(/bin/bash "$challenge/submissions/c-iouring-pavlyhalim/start.sh")
   limit=65535
