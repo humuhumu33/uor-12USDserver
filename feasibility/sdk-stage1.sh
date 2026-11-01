@@ -17,17 +17,14 @@ ROOT="$1" python3 - <<'PY2'
 import os, re
 path = "src/Kernels.lex.tex"
 source = open(path).read()
-blocks = re.split(r"(?=
-definition\{)", source)
+blocks = re.split(r"(?=\ndefinition\{)", source)
 kept = []
 for block in blocks:
     name = re.search(r"name: (\w+),", block)
     if name and name.group(1) != os.environ["ROOT"]:
-        block = re.sub(r",
-\s*production: \{[^}]*\}", "", block)
+        block = re.sub(r",\n\s*production: \{[^}]*\}", "", block)
     kept.append(block)
-open(path, "w", newline="
-").write("".join(kept))
+open(path, "w", newline="\n").write("".join(kept))
 PY2
 grep -c "production:" src/Kernels.lex.tex
 lexlean lock > /dev/null

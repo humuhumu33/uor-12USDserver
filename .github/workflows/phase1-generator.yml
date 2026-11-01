@@ -13,10 +13,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - {size: 4096, chunk: 1024}
           - {size: 16384, chunk: 16384}
-          - {size: 16384, chunk: 1024}
           - {size: 65536, chunk: 1024}
+          - {size: 131072, chunk: 1024}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:

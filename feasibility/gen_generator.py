@@ -12,9 +12,19 @@ text = b"int main(void) { return 42; }\n"
 text += (line * (size // len(line) + 1))[: max(0, size - len(text))]
 parts = [text[i : i + chunk] for i in range(0, len(text), chunk)]
 
+# Sixteen appends per definition keep the nesting under the semantic-module JSON recursion limit.
+sections = ""
 body = "seed"
-for part in parts:
-    body = f"(prim append {body} 0x{part.hex()} : Bytes)"
+for start in range(0, len(parts), 16):
+    number = start // 16
+    inner = "seed"
+    for part in parts[start : start + 16]:
+        inner = f"(prim append {inner} 0x{part.hex()} : Bytes)"
+    sections += (
+        "definition{\n  name: section" + str(number) + ",\n  parameters: [seed : Bytes],\n  result: Bytes,\n"
+        f"  body: {inner},\n  executable: true\n}}\n\n"
+    )
+    body = f"(section{number} {body})"
 
 (root / "src").mkdir(parents=True, exist_ok=True)
 (root / "src" / "Emit.lex.tex").write_text(
@@ -22,7 +32,8 @@ for part in parts:
     "\\useglossary{lexlean.std.nat@1.2.0}\n"
     "\\title{Natural number addition}\n"
     "\\begin{semanticmodule}\n"
-    "definition{\n  name: emitSource,\n  parameters: [seed : Bytes],\n  result: Bytes,\n"
+    + sections
+    + "definition{\n  name: emitSource,\n  parameters: [seed : Bytes],\n  result: Bytes,\n"
     f"  body: {body},\n"
     "  executable: true,\n"
     "  production: {effects: [allocation], targets: [rust-std]}\n}\n"
