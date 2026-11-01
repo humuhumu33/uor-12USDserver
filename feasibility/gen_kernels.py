@@ -92,11 +92,11 @@ def xor3(p, q, r):
 
 SHA_ROUND = (
     f"(let s1 : UInt64 := {xor3(rot('e', 6), rot('e', 11), rot('e', 25))}; "
-    "let ch : UInt64 := (prim bit_xor (prim bit_and e f : UInt64) (prim bit_and (prim bit_not e : UInt64) g : UInt64) : UInt64); "
-    f"let t1 : UInt64 := (add32 (add32 (add32 h s1) (prim bit_and ch {LOW32} : UInt64)) kw); "
-    f"let s0 : UInt64 := {xor3(rot('a', 2), rot('a', 13), rot('a', 22))}; "
-    f"let mj : UInt64 := {xor3('(prim bit_and a b : UInt64)', '(prim bit_and a c : UInt64)', '(prim bit_and b c : UInt64)')}; "
-    "((add32 t1 (add32 s0 mj)), (add32 d t1)))"
+    "(let ch : UInt64 := (prim bit_xor (prim bit_and e f : UInt64) (prim bit_and (prim bit_not e : UInt64) g : UInt64) : UInt64); "
+    f"(let t1 : UInt64 := (add32 (add32 (add32 h s1) (prim bit_and ch {LOW32} : UInt64)) kw); "
+    f"(let s0 : UInt64 := {xor3(rot('a', 2), rot('a', 13), rot('a', 22))}; "
+    f"(let mj : UInt64 := {xor3('(prim bit_and a b : UInt64)', '(prim bit_and a c : UInt64)', '(prim bit_and b c : UInt64)')}; "
+    "((add32 t1 (add32 s0 mj)), (add32 d t1)))))))"
 )
 
 JSON = hx('{"id":')
@@ -159,7 +159,7 @@ SOURCE = (
             "definition{\n  name: encodeAction,\n  parameters: [action : Action],\n  result: UInt8,\n"
             "  body: (match action | Action.nothing => (0 : UInt8) | Action.begin => (1 : UInt8) | Action.commit => (2 : UInt8) | Action.sendAll => (3 : UInt8) | Action.failAll => (4 : UInt8)),\n  executable: true\n}\n",
             "definition{\n  name: stepCode,\n  parameters: [phase : UInt8, event : UInt8],\n  result: (UInt8 * UInt8),\n"
-            "  body: (let p : Phase := (decodePhase phase); let e : Event := (decodeEvent event); ((encodePhase (nextPhase p e)), (encodeAction (actionOf p e)))),\n  "
+            "  body: (let p : Phase := (decodePhase phase); (let e : Event := (decodeEvent event); ((encodePhase (nextPhase p e)), (encodeAction (actionOf p e))))),\n  "
             + EXEC
             + ",\n  production: {effects: [], targets: [rust-core]}\n}\n",
             "definition{\n  name: routeWords,\n  parameters: [w0 : UInt64, w1 : UInt64],\n  result: UInt64,\n  body: "

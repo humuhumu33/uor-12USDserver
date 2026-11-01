@@ -123,7 +123,7 @@ definition{
   name: stepCode,
   parameters: [phase : UInt8, event : UInt8],
   result: (UInt8 * UInt8),
-  body: (let p : Phase := (decodePhase phase); let e : Event := (decodeEvent event); ((encodePhase (nextPhase p e)), (encodeAction (actionOf p e)))),
+  body: (let p : Phase := (decodePhase phase); (let e : Event := (decodeEvent event); ((encodePhase (nextPhase p e)), (encodeAction (actionOf p e))))),
   axioms: [Quot.sound, propext],
   executable: true,
   production: {effects: [], targets: [rust-core]}
@@ -200,7 +200,7 @@ definition{
   name: shaRound,
   parameters: [a : UInt64, b : UInt64, c : UInt64, d : UInt64, e : UInt64, f : UInt64, g : UInt64, h : UInt64, kw : UInt64],
   result: (UInt64 * UInt64),
-  body: (let s1 : UInt64 := (prim bit_xor (prim bit_xor (rotr32 e (6 : UInt32) (26 : UInt32)) (rotr32 e (11 : UInt32) (21 : UInt32)) : UInt64) (rotr32 e (25 : UInt32) (7 : UInt32)) : UInt64); let ch : UInt64 := (prim bit_xor (prim bit_and e f : UInt64) (prim bit_and (prim bit_not e : UInt64) g : UInt64) : UInt64); let t1 : UInt64 := (add32 (add32 (add32 h s1) (prim bit_and ch (4294967295 : UInt64) : UInt64)) kw); let s0 : UInt64 := (prim bit_xor (prim bit_xor (rotr32 a (2 : UInt32) (30 : UInt32)) (rotr32 a (13 : UInt32) (19 : UInt32)) : UInt64) (rotr32 a (22 : UInt32) (10 : UInt32)) : UInt64); let mj : UInt64 := (prim bit_xor (prim bit_xor (prim bit_and a b : UInt64) (prim bit_and a c : UInt64) : UInt64) (prim bit_and b c : UInt64) : UInt64); ((add32 t1 (add32 s0 mj)), (add32 d t1))),
+  body: (let s1 : UInt64 := (prim bit_xor (prim bit_xor (rotr32 e (6 : UInt32) (26 : UInt32)) (rotr32 e (11 : UInt32) (21 : UInt32)) : UInt64) (rotr32 e (25 : UInt32) (7 : UInt32)) : UInt64); (let ch : UInt64 := (prim bit_xor (prim bit_and e f : UInt64) (prim bit_and (prim bit_not e : UInt64) g : UInt64) : UInt64); (let t1 : UInt64 := (add32 (add32 (add32 h s1) (prim bit_and ch (4294967295 : UInt64) : UInt64)) kw); (let s0 : UInt64 := (prim bit_xor (prim bit_xor (rotr32 a (2 : UInt32) (30 : UInt32)) (rotr32 a (13 : UInt32) (19 : UInt32)) : UInt64) (rotr32 a (22 : UInt32) (10 : UInt32)) : UInt64); (let mj : UInt64 := (prim bit_xor (prim bit_xor (prim bit_and a b : UInt64) (prim bit_and a c : UInt64) : UInt64) (prim bit_and b c : UInt64) : UInt64); ((add32 t1 (add32 s0 mj)), (add32 d t1))))))),
   axioms: [Quot.sound, propext],
   executable: true,
   production: {effects: [], targets: [rust-core]}
