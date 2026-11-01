@@ -285,6 +285,26 @@ definition{
 }
 
 definition{
+  name: zeroRoot,
+  parameters: [word : UInt64],
+  result: Bool,
+  body: (zeroByte word),
+  axioms: [Quot.sound, propext],
+  executable: true,
+  production: {effects: [], targets: [rust-core]}
+}
+
+definition{
+  name: escapeIf,
+  parameters: [word : UInt64],
+  result: Bool,
+  body: (if (zeroByte (prim bit_xor word (2459565876494606882 : UInt64) : UInt64)) then true else (if (zeroByte (prim bit_xor word (6655295901103053916 : UInt64) : UInt64)) then true else (zeroByte (prim bit_and word (16204198715729174752 : UInt64) : UInt64)))),
+  axioms: [Quot.sound, propext],
+  executable: true,
+  production: {effects: [], targets: [rust-core]}
+}
+
+definition{
   name: shr,
   parameters: [x : UInt64, n : UInt32],
   result: UInt64,

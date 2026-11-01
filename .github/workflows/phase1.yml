@@ -1,8 +1,6 @@
 name: phase1-feasibility
 on:
-  push:
-    branches: ['feasibility/phase-1']
-    paths: ['feasibility/kernels/**', 'feasibility/sdk-stage1.sh']
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
