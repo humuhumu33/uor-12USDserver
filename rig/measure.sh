@@ -25,11 +25,23 @@ fi
 sudo systemd-run --quiet --scope --unit="$unit" -p AllowedCPUs=0 -p MemoryMax=1750M -p MemorySwapMax=0 -p LimitNOFILE="$limit" \
   --uid="$(id -u)" --gid="$(id -g)" "${command[@]}" > "/tmp/$unit.log" 2>&1 &
 for _ in $(seq 1 60); do
-  curl -s -o /dev/null "http://127.0.0.1:$port/health" && break
+  curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$port/health" && break
   sleep 1
 done
-curl -s "http://127.0.0.1:$port/health" | head -c 200
+if ! curl -s --max-time 2 "http://127.0.0.1:$port/health" | head -c 200; then
+  echo "SERVER did not come up"
+fi
 echo
+if [ ! -f "$cgroup/cpu.stat" ] || ! curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$port/health"; then
+  echo "SERVERLOG $unit"
+  cat "/tmp/$unit.log"
+  sudo systemctl status "$unit.scope" --no-pager 2>&1 | head -20
+  ls /sys/fs/cgroup/system.slice | grep srv
+  find /sys/fs/cgroup -name "$unit*" | head
+  sudo journalctl -n 20 --no-pager 2>&1 | cut -c1-200
+  sysctl kernel.io_uring_disabled 2>&1
+  exit 1
+fi
 taskset -c 1-3 "$rig/loadgen" "$port" "$users" "$ramp" "$hold" "$challenge/tokens.txt" > "/tmp/load-$unit.log" 2>&1 &
 load=$!
 sleep "$ramp"
