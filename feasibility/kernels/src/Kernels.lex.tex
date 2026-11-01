@@ -227,9 +227,9 @@ definition{
 
 definition{
   name: postJson,
-  parameters: [id : Bytes, body : Bytes, created : Bytes, author : Bytes, likes : Bytes],
+  parameters: [pid : Bytes, text : Bytes, created : Bytes, author : Bytes, likes : Bytes],
   result: Bytes,
-  body: (prim append (prim append (prim append (prim append (prim append (prim append (prim append (prim append (prim append (prim append 0x7b226964223a id : Bytes) 0x2c22626f6479223a22 : Bytes) body : Bytes) 0x222c22637265617465645f6174223a22 : Bytes) created : Bytes) 0x222c22617574686f72223a22 : Bytes) author : Bytes) 0x222c226c696b655f636f756e74223a : Bytes) likes : Bytes) 0x7d : Bytes),
+  body: (prim append (prim append (prim append (prim append (prim append (prim append (prim append (prim append (prim append (prim append 0x7b226964223a pid : Bytes) 0x2c22626f6479223a22 : Bytes) text : Bytes) 0x222c22637265617465645f6174223a22 : Bytes) created : Bytes) 0x222c22617574686f72223a22 : Bytes) author : Bytes) 0x222c226c696b655f636f756e74223a : Bytes) likes : Bytes) 0x7d : Bytes),
   axioms: [Quot.sound, propext],
   executable: true,
   production: {effects: [allocation], targets: [rust-std]}

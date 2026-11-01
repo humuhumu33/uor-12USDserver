@@ -101,8 +101,8 @@ SHA_ROUND = (
 
 JSON = hx('{"id":')
 for part, literal in [
-    ("id", ',"body":"'),
-    ("body", '","created_at":"'),
+    ("pid", ',"body":"'),
+    ("text", '","created_at":"'),
     ("created", '","author":"'),
     ("author", '","like_count":'),
     ("likes", "}"),
@@ -208,7 +208,7 @@ SOURCE = (
             + ",\n  "
             + EXEC
             + ",\n  production: {effects: [allocation], targets: [rust-std]}\n}\n",
-            "definition{\n  name: postJson,\n  parameters: [id : Bytes, body : Bytes, created : Bytes, author : Bytes, likes : Bytes],\n  result: Bytes,\n  body: "
+            "definition{\n  name: postJson,\n  parameters: [pid : Bytes, text : Bytes, created : Bytes, author : Bytes, likes : Bytes],\n  result: Bytes,\n  body: "
             + JSON
             + ",\n  "
             + EXEC
