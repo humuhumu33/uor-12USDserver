@@ -1,0 +1,28 @@
+name: phase1-feasibility
+on:
+  push:
+    branches: ['feasibility/phase-1']
+permissions:
+  contents: read
+jobs:
+  feasibility:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - name: Stage 1 in the locked SDK
+        shell: bash
+        run: |
+          image=$(sed -n 's/.*"sdk_image":"\([^"]*\)".*/\1/p' prismpm.lock)
+          mkdir -p feasibility/out
+          chmod -R a+rwX feasibility
+          docker run --rm --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,exec,nosuid,size=2g \
+            --volume "$PWD:$PWD" --workdir "$PWD" --env HOME=/tmp/home "$image" \
+            bash -c 'mkdir -p "$HOME"; bash feasibility/sdk-stage1.sh' 2>&1 | tee feasibility/out/stage1.log
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: phase1-out
+          path: feasibility/out

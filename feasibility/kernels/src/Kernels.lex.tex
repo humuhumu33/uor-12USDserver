@@ -1,0 +1,238 @@
+\begin{lexlean}{Kernels}
+\useglossary{lexlean.std.bool@1.2.0}
+\useglossary{lexlean.std.nat@1.2.0}
+\title{Natural number addition}
+\begin{semanticmodule}
+inductive{
+  name: Phase,
+  type_parameters: [],
+  parameters: [],
+  constructors: [{name: idle, fields: []}, {name: reading, fields: []}, {name: committing, fields: []}]
+}
+
+inductive{
+  name: Event,
+  type_parameters: [],
+  parameters: [],
+  constructors: [{name: request, fields: []}, {name: batchEnd, fields: []}, {name: commitOk, fields: []}, {name: commitFail, fields: []}]
+}
+
+inductive{
+  name: Action,
+  type_parameters: [],
+  parameters: [],
+  constructors: [{name: nothing, fields: []}, {name: begin, fields: []}, {name: commit, fields: []}, {name: sendAll, fields: []}, {name: failAll, fields: []}]
+}
+
+definition{
+  name: nextPhase,
+  parameters: [phase : Phase, event : Event],
+  result: Phase,
+  body: (match phase
+    | Phase.idle => (match event
+      | Event.request => (ctor Phase.reading)
+      | Event.batchEnd => (ctor Phase.idle)
+      | Event.commitOk => (ctor Phase.idle)
+      | Event.commitFail => (ctor Phase.idle))
+    | Phase.reading => (match event
+      | Event.request => (ctor Phase.reading)
+      | Event.batchEnd => (ctor Phase.committing)
+      | Event.commitOk => (ctor Phase.reading)
+      | Event.commitFail => (ctor Phase.reading))
+    | Phase.committing => (match event
+      | Event.request => (ctor Phase.committing)
+      | Event.batchEnd => (ctor Phase.committing)
+      | Event.commitOk => (ctor Phase.idle)
+      | Event.commitFail => (ctor Phase.idle))),
+  executable: true
+}
+
+definition{
+  name: actionOf,
+  parameters: [phase : Phase, event : Event],
+  result: Action,
+  body: (match phase
+    | Phase.idle => (match event
+      | Event.request => (ctor Action.begin)
+      | Event.batchEnd => (ctor Action.nothing)
+      | Event.commitOk => (ctor Action.nothing)
+      | Event.commitFail => (ctor Action.nothing))
+    | Phase.reading => (match event
+      | Event.request => (ctor Action.nothing)
+      | Event.batchEnd => (ctor Action.commit)
+      | Event.commitOk => (ctor Action.nothing)
+      | Event.commitFail => (ctor Action.nothing))
+    | Phase.committing => (match event
+      | Event.request => (ctor Action.nothing)
+      | Event.batchEnd => (ctor Action.nothing)
+      | Event.commitOk => (ctor Action.sendAll)
+      | Event.commitFail => (ctor Action.failAll))),
+  executable: true
+}
+
+theorem{
+  name: send_only_after_commit,
+  parameters: [phase : Phase, event : Event],
+  statement: (((actionOf phase event) = (ctor Action.sendAll)) -> ((phase = (ctor Phase.committing)) /\ (event = (ctor Event.commitOk)))),
+  proof: induction{
+    branches: [
+      {proof: induction{branches: [{proof: simplify{definitions: [actionOf]}, binders: [], constructor: request}, {proof: simplify{definitions: [actionOf]}, binders: [], constructor: batchEnd}, {proof: simplify{definitions: [actionOf]}, binders: [], constructor: commitOk}, {proof: simplify{definitions: [actionOf]}, binders: [], constructor: commitFail}], scrutinee: event}, binders: [], constructor: idle},
+      {proof: induction{branches: [{proof: simplify{definitions: [actionOf]}, binders: [], constructor: request}, {proof: simplify{definitions: [actionOf]}, binders: [], constructor: batchEnd}, {proof: simplify{definitions: [actionOf]}, binders: [], constructor: commitOk}, {proof: simplify{definitions: [actionOf]}, binders: [], constructor: commitFail}], scrutinee: event}, binders: [], constructor: reading},
+      {proof: induction{branches: [{proof: simplify{definitions: [actionOf]}, binders: [], constructor: request}, {proof: simplify{definitions: [actionOf]}, binders: [], constructor: batchEnd}, {proof: simplify{definitions: [actionOf]}, binders: [], constructor: commitOk}, {proof: simplify{definitions: [actionOf]}, binders: [], constructor: commitFail}], scrutinee: event}, binders: [], constructor: committing}
+    ],
+    scrutinee: phase
+  },
+  axioms: [propext]
+}
+
+definition{
+  name: decodePhase,
+  parameters: [code : UInt8],
+  result: Phase,
+  body: (if (prim equal code (0 : UInt8) : Bool) then (ctor Phase.idle) else (if (prim equal code (1 : UInt8) : Bool) then (ctor Phase.reading) else (ctor Phase.committing))),
+  axioms: [Quot.sound, propext],
+  executable: true
+}
+
+definition{
+  name: decodeEvent,
+  parameters: [code : UInt8],
+  result: Event,
+  body: (if (prim equal code (0 : UInt8) : Bool) then (ctor Event.request) else (if (prim equal code (1 : UInt8) : Bool) then (ctor Event.batchEnd) else (if (prim equal code (2 : UInt8) : Bool) then (ctor Event.commitOk) else (ctor Event.commitFail)))),
+  axioms: [Quot.sound, propext],
+  executable: true
+}
+
+definition{
+  name: encodePhase,
+  parameters: [phase : Phase],
+  result: UInt8,
+  body: (match phase | Phase.idle => (0 : UInt8) | Phase.reading => (1 : UInt8) | Phase.committing => (2 : UInt8)),
+  executable: true
+}
+
+definition{
+  name: encodeAction,
+  parameters: [action : Action],
+  result: UInt8,
+  body: (match action | Action.nothing => (0 : UInt8) | Action.begin => (1 : UInt8) | Action.commit => (2 : UInt8) | Action.sendAll => (3 : UInt8) | Action.failAll => (4 : UInt8)),
+  executable: true
+}
+
+definition{
+  name: stepCode,
+  parameters: [phase : UInt8, event : UInt8],
+  result: (UInt8 * UInt8),
+  body: (let p : Phase := (decodePhase phase); let e : Event := (decodeEvent event); ((encodePhase (nextPhase p e)), (encodeAction (actionOf p e)))),
+  axioms: [Quot.sound, propext],
+  executable: true,
+  production: {effects: [], targets: [rust-core]}
+}
+
+definition{
+  name: routeWords,
+  parameters: [w0 : UInt64, w1 : UInt64],
+  result: UInt64,
+  body: (if ((prim equal w0 (7306358323070387527 : UInt64) : Bool) && (prim equal w1 (3544139754885357668 : UInt64) : Bool)) then (1 : UInt64) else (if ((prim equal w0 (7018130145941931335 : UInt64) : Bool) && (prim equal w1 (5788344089836024940 : UInt64) : Bool)) then (2 : UInt64) else (if ((prim equal w0 (8317990384484762951 : UInt64) : Bool) && (prim equal (prim bit_and w1 (16777215 : UInt64) : UInt64) (3109748 : UInt64) : Bool)) then (3 : UInt64) else (if ((prim equal w0 (8029969951501799248 : UInt64) : Bool) && (prim equal w1 (5788344089836745843 : UInt64) : Bool)) then (4 : UInt64) else (if ((prim equal w0 (8029969951501799248 : UInt64) : Bool) && (prim equal (prim bit_and w1 (4294967295 : UInt64) : UInt64) (796095603 : UInt64) : Bool)) then (5 : UInt64) else (0 : UInt64)))))),
+  axioms: [Quot.sound, propext],
+  executable: true,
+  production: {effects: [], targets: [rust-core]}
+}
+
+definition{
+  name: zeroByte,
+  parameters: [x : UInt64],
+  result: Bool,
+  body: (match (prim checked_add (prim bit_and x (9187201950435737471 : UInt64) : UInt64) (9187201950435737471 : UInt64) : (Option UInt64))
+    | Option.none => false
+    | Option.some t => (if (prim equal (prim bit_or (prim bit_or t x : UInt64) (9187201950435737471 : UInt64) : UInt64) (18446744073709551615 : UInt64) : Bool) then false else true)),
+  axioms: [Quot.sound, propext],
+  executable: true
+}
+
+definition{
+  name: needsEscape,
+  parameters: [word : UInt64],
+  result: Bool,
+  body: ((zeroByte (prim bit_xor word (2459565876494606882 : UInt64) : UInt64)) || ((zeroByte (prim bit_xor word (6655295901103053916 : UInt64) : UInt64)) || (zeroByte (prim bit_and word (16204198715729174752 : UInt64) : UInt64)))),
+  axioms: [Quot.sound, propext],
+  executable: true,
+  production: {effects: [], targets: [rust-core]}
+}
+
+definition{
+  name: shr,
+  parameters: [x : UInt64, n : UInt32],
+  result: UInt64,
+  body: (match (prim shift_right x n : (Option UInt64)) | Option.none => (0 : UInt64) | Option.some v => v),
+  axioms: [Quot.sound, propext],
+  executable: true
+}
+
+definition{
+  name: shl,
+  parameters: [x : UInt64, n : UInt32],
+  result: UInt64,
+  body: (match (prim shift_left x n : (Option UInt64)) | Option.none => (0 : UInt64) | Option.some v => v),
+  axioms: [Quot.sound, propext],
+  executable: true
+}
+
+definition{
+  name: rotr32,
+  parameters: [x : UInt64, n : UInt32, m : UInt32],
+  result: UInt64,
+  body: (prim bit_and (prim bit_or (shr x n) (shl x m) : UInt64) (4294967295 : UInt64) : UInt64),
+  axioms: [Quot.sound, propext],
+  executable: true
+}
+
+definition{
+  name: add32,
+  parameters: [x : UInt64, y : UInt64],
+  result: UInt64,
+  body: (match (prim checked_add x y : (Option UInt64)) | Option.none => (0 : UInt64) | Option.some v => (prim bit_and v (4294967295 : UInt64) : UInt64)),
+  axioms: [Quot.sound, propext],
+  executable: true
+}
+
+definition{
+  name: shaRound,
+  parameters: [a : UInt64, b : UInt64, c : UInt64, d : UInt64, e : UInt64, f : UInt64, g : UInt64, h : UInt64, kw : UInt64],
+  result: (UInt64 * UInt64),
+  body: (let s1 : UInt64 := (prim bit_xor (prim bit_xor (rotr32 e (6 : UInt32) (26 : UInt32)) (rotr32 e (11 : UInt32) (21 : UInt32)) : UInt64) (rotr32 e (25 : UInt32) (7 : UInt32)) : UInt64); let ch : UInt64 := (prim bit_xor (prim bit_and e f : UInt64) (prim bit_and (prim bit_not e : UInt64) g : UInt64) : UInt64); let t1 : UInt64 := (add32 (add32 (add32 h s1) (prim bit_and ch (4294967295 : UInt64) : UInt64)) kw); let s0 : UInt64 := (prim bit_xor (prim bit_xor (rotr32 a (2 : UInt32) (30 : UInt32)) (rotr32 a (13 : UInt32) (19 : UInt32)) : UInt64) (rotr32 a (22 : UInt32) (10 : UInt32)) : UInt64); let mj : UInt64 := (prim bit_xor (prim bit_xor (prim bit_and a b : UInt64) (prim bit_and a c : UInt64) : UInt64) (prim bit_and b c : UInt64) : UInt64); ((add32 t1 (add32 s0 mj)), (add32 d t1))),
+  axioms: [Quot.sound, propext],
+  executable: true,
+  production: {effects: [], targets: [rust-core]}
+}
+
+definition{
+  name: startsWith,
+  parameters: [raw : Bytes, prefix : Bytes, count : Nat],
+  result: Bool,
+  body: (match (prim slice raw 0 count : (Option Bytes)) | Option.none => false | Option.some head => (prim equal head prefix : Bool)),
+  axioms: [Quot.sound, propext],
+  executable: true
+}
+
+definition{
+  name: routeBytes,
+  parameters: [raw : Bytes],
+  result: Nat,
+  body: (if (startsWith raw 0x474554202f6665656420485454502f31 16) then 1 else (if (startsWith raw 0x474554202f6865616c74682048545450 16) then 2 else (if (startsWith raw 0x474554202f706f7374732f 11) then 3 else (if (startsWith raw 0x504f5354202f706f7374732048545450 16) then 4 else (if (startsWith raw 0x504f5354202f706f7374732f 12) then 5 else 0))))),
+  axioms: [Quot.sound, propext],
+  executable: true,
+  production: {effects: [allocation], targets: [rust-std]}
+}
+
+definition{
+  name: postJson,
+  parameters: [id : Bytes, body : Bytes, created : Bytes, author : Bytes, likes : Bytes],
+  result: Bytes,
+  body: (prim append (prim append (prim append (prim append (prim append (prim append (prim append (prim append (prim append (prim append 0x7b226964223a id : Bytes) 0x2c22626f6479223a22 : Bytes) body : Bytes) 0x222c22637265617465645f6174223a22 : Bytes) created : Bytes) 0x222c22617574686f72223a22 : Bytes) author : Bytes) 0x222c226c696b655f636f756e74223a : Bytes) likes : Bytes) 0x7d : Bytes),
+  axioms: [Quot.sound, propext],
+  executable: true,
+  production: {effects: [allocation], targets: [rust-std]}
+}
+\end{semanticmodule}
+\end{lexlean}
