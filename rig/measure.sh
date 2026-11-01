@@ -8,7 +8,7 @@ hold="$4"
 challenge="$5"
 rig="$6"
 unit="srv-$name-$users"
-cgroup="/sys/fs/cgroup/system.slice/$unit.scope"
+cgroup="/sys/fs/cgroup/system.slice/$unit.service"
 port=3000
 db=/tmp/rig-feed.db
 rm -f "$db" "$db"-wal "$db"-shm
@@ -19,11 +19,14 @@ if [ "$name" = floor ]; then
   command=("$rig/floor" "$port")
   limit=1048576
 else
-  command=(env SQLITE_PATH="$db" JWT_SECRET=twelve-dollar-challenge HOST=127.0.0.1 PORT="$port" bash "$challenge/submissions/c-iouring-pavlyhalim/start.sh")
+  command=(/bin/bash "$challenge/submissions/c-iouring-pavlyhalim/start.sh")
   limit=65535
 fi
-sudo systemd-run --quiet --scope --unit="$unit" -p AllowedCPUs=0 -p MemoryMax=1750M -p MemorySwapMax=0 -p LimitNOFILE="$limit" \
-  --uid="$(id -u)" --gid="$(id -g)" "${command[@]}" > "/tmp/$unit.log" 2>&1 &
+# A transient service, as the organiser's systemd unit runs entries.
+sudo systemd-run --unit="$unit" --collect -p AllowedCPUs=0 -p MemoryMax=1750M -p MemorySwapMax=0 -p LimitNOFILE="$limit" \
+  -p AmbientCapabilities=CAP_NET_BIND_SERVICE -p StandardOutput="file:/tmp/$unit.log" -p StandardError="file:/tmp/$unit.log" \
+  --setenv=SQLITE_PATH="$db" --setenv=JWT_SECRET=twelve-dollar-challenge --setenv=HOST=127.0.0.1 --setenv=PORT="$port" \
+  --uid="$(id -u)" --gid="$(id -g)" "${command[@]}"
 for _ in $(seq 1 60); do
   curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$port/health" && break
   sleep 1
@@ -35,7 +38,7 @@ echo
 if [ ! -f "$cgroup/cpu.stat" ] || ! curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$port/health"; then
   echo "SERVERLOG $unit"
   cat "/tmp/$unit.log"
-  sudo systemctl status "$unit.scope" --no-pager 2>&1 | head -20
+  sudo systemctl status "$unit.service" --no-pager 2>&1 | head -20
   ls /sys/fs/cgroup/system.slice | grep srv
   find /sys/fs/cgroup -name "$unit*" | head
   sudo journalctl -n 20 --no-pager 2>&1 | cut -c1-200
@@ -67,5 +70,5 @@ per = cpu / requests if requests else 0
 kb = (base - now) / max(users, 1)
 print(f"RESULT server={name} users={users} cpu_pct={100 * cpu / (hold * 1e6):.1f} us_per_request={per:.2f} cgroup_peak_mb={peak / 1048576:.0f} cgroup_now_mb={current / 1048576:.0f} machine_kb_per_connection={kb:.2f} sockstat_mem_pages={sock1 - sock0}")
 PY
-sudo systemctl stop "$unit.scope" 2> /dev/null
+sudo systemctl stop "$unit.service" 2> /dev/null
 sleep 3
