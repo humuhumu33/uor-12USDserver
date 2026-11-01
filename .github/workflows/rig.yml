@@ -56,7 +56,6 @@ jobs:
       - name: Measure ${{ matrix.server }}
         shell: bash
         run: |
-          sudo bash -c 'ulimit -Hn 1048576' || true
           for users in 20000 60000 120000; do
             echo "=== ${{ matrix.server }} at $users users"
             sudo prlimit --pid $$ --nofile=1048576:1048576

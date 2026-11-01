@@ -17,7 +17,7 @@
 #include <time.h>
 #include <unistd.h>
 
-enum { ST_CONNECT, ST_FEED, ST_POST, ST_LIKE, ST_CREATE };
+enum { ST_CONNECT, ST_FEED, ST_POST, ST_DECIDE, ST_LIKE, ST_CREATE };
 #define SLOT_MS 10
 #define SLOTS 4096
 #define NONE UINT32_MAX
@@ -153,14 +153,8 @@ static void after_response(uint32_t id, int ok) {
         schedule(id, uniform(3, 7));
         break;
     case ST_POST:
+        u->step = ST_DECIDE;
         schedule(id, uniform(3, 8));
-        if (uniform(0, 1) < 0.15) u->step = ST_LIKE;
-        else if (uniform(0, 1) < 0.02) u->step = ST_CREATE;
-        else { u->step = ST_FEED; users[id].post = 0; }
-        if (u->step == ST_FEED) {
-            // The idle follows the think that was just scheduled, as load.js sleeps once after the writes.
-            wheel[(wheel_at + 1) % SLOTS] = wheel[(wheel_at + 1) % SLOTS];
-        }
         break;
     case ST_LIKE:
         if (uniform(0, 1) < 0.02) {
@@ -198,7 +192,6 @@ static void on_readable(uint32_t id) {
                 return;
             }
             int status = got > 12 ? atoi(reads + 9) : 0;
-            char *length = memmem(reads, end - reads, "ontent-", 7);
             uint32_t declared = 0;
             for (char *p = reads; p && p < end; p = memchr(p, '\n', end - p), p = p ? p + 1 : p) {
                 if (strncasecmp(p, "content-length:", 15) == 0) {
@@ -206,7 +199,6 @@ static void on_readable(uint32_t id) {
                     break;
                 }
             }
-            (void)length;
             char *body = end + 4;
             uint32_t have = got - (body - reads);
             int ok = status == 200 || status == 201;
@@ -227,7 +219,6 @@ static void on_readable(uint32_t id) {
                 continue;
             }
             u->remaining = declared - have;
-            u->fd = u->fd | 0;
             continue;
         }
         if ((uint32_t)got >= u->remaining) {
@@ -271,6 +262,17 @@ static void on_due(uint32_t id) {
     if (u->fd < 0) {
         open_user(id);
         return;
+    }
+    if (u->step == ST_DECIDE) {
+        if (uniform(0, 1) < 0.15) {
+            u->step = ST_LIKE;
+        } else if (uniform(0, 1) < 0.02) {
+            u->step = ST_CREATE;
+        } else {
+            u->step = ST_FEED;
+            schedule(id, uniform(5, 15));
+            return;
+        }
     }
     send_request(id);
 }
