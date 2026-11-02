@@ -66,10 +66,10 @@ jobs:
         shell: bash
         run: |
           sudo prlimit --pid $$ --nofile=1048576:1048576
-          # Interleaved twice at the top load, so drift on this machine hits both servers.
-          for users in 120000 120000; do
+          # Near the limit, interleaved so drift on this machine hits both servers.
+          for users in 240000 300000; do
             for server in ours control; do
               echo "=== $server at $users users"
-              PROFILE=1 bash rig/measure.sh "$server" "$users" 40 120 "$RUNNER_TEMP/challenge" "$PWD/rig"
+              bash rig/measure.sh "$server" "$users" 90 150 "$RUNNER_TEMP/challenge" "$PWD/rig"
             done
           done
