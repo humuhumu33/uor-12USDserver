@@ -48,7 +48,7 @@ def literals(data):
 def exhaust(variables, definitions):
     """Case analysis on every value of the listed finite variables, each case closed by unfolding the definitions."""
     if not variables:
-        return "simplify{definitions: [" + ", ".join(definitions) + "]}"
+        return "simplify{definitions: [" + ", ".join(sorted(definitions)) + "]}"
     name, constructors = variables[0]
     branches = [
         # The notation reads a bare true or false as a boolean, and a constructor must be a name.
