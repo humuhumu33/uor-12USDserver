@@ -15,7 +15,8 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      # Only meaningful on a commit whose module is fresh: on a stale one every defect fails for staleness alone.
+      # Only meaningful on a commit whose module is fresh: on a stale one every defect fails for staleness alone, so
+      # after a server change, run it on the commit that brings the module up to date.
       - name: Plant each defect and confirm a gate rejects it
         shell: bash
         run: |
