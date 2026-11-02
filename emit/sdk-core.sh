@@ -15,7 +15,7 @@ path = pathlib.Path(sys.argv[2])
 axioms = json.loads(path.read_text()) if path.exists() else {}
 changed = 0
 for diagnostic in result.get("diagnostics", []):
-    match = re.search(r"`[\w.]*\.(\w+)` violates its w+ axiom policy: observed \[(.*?)\]", diagnostic["message"])
+    match = re.search(r"`[\w.]*\.(\w+)` violates its \w+ axiom policy: observed \[(.*?)\]", diagnostic["message"])
     if match:
         axioms[match.group(1)] = sorted(a.strip() for a in match.group(2).split(",") if a.strip())
         changed += 1
