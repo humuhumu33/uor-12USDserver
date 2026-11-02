@@ -47,6 +47,6 @@ The folder a pull request adds holds no C. `build.sh` checks the theorems with o
 
 | Defect | Failing command | Result |
 | --- | --- | --- |
-| `gateNext` changed in `Emit.lean`, so a theorem is false | `PGO=0 bash build.sh` | PLANT_FALSE |
-| A theorem's proof replaced by `sorry` | `PGO=0 bash build.sh` | PLANT_SORRY |
-| `README.md` edited without the program | `PGO=0 bash build.sh` | PLANT_README |
+| `gateNext` changed in `Emit.lean`, so a copied log no longer opens the gate | `PGO=0 bash build.sh` | PLANT_FALSE |
+| A theorem's proof replaced by `sorry` | `PGO=0 bash build.sh` | `declaration uses sorry`, `build failed`, exit 1 |
+| `README.md` edited without the program | `PGO=0 bash build.sh` | `cmp` differs, exit 1 |

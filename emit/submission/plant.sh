@@ -34,11 +34,10 @@ tail -3 "$RUNNER_TEMP/plant.log" | cut -c1-200
 plant false_theorem "
 import pathlib
 p = pathlib.Path('lean/UorEmit/Emit.lean')
-lines = p.read_text().split('\n')
-hits = [i for i, l in enumerate(lines) if 'public def gateNext' in l]
-assert len(hits) == 1
-lines[hits[0]] = lines[hits[0]].replace('Flag.no', 'Flag.yes')
-p.write_text('\n'.join(lines), newline='\n')
+s = p.read_text()
+old = 'match copied with | Flag.yes => Flag.no'
+assert s.count(old) == 1
+p.write_text(s.replace(old, 'match copied with | Flag.yes => Flag.yes'), newline='\n')
 "
 
 plant theorem_left_as_sorry "

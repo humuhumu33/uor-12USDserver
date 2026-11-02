@@ -72,8 +72,6 @@ jobs:
           sudo prlimit --pid $$ --nofile=1048576:1048576
           # Runners differ by CPU model: compare only within one job, and read this line before comparing across jobs.
           echo "RUNNER $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2) kernel=$(uname -r)"
-          # Near the limit, interleaved so drift on this machine hits both servers.
-          # 73%: the quota at which the control spends the same share here at 295k as on the box (59% against 81%).
           # One run of each with no limit, as a check on the commit. Comparisons get their own jobs.
           for server in ours control; do
             echo "=== $server at 320000 users"
