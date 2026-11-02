@@ -25,13 +25,13 @@ def text(piece):
 
 
 def literals(data):
-    # One literal per source line, so the module reads as the source does. Two things are written as bytes: a percent
-    # sign, forbidden anywhere in a LexLean file, and the slash of anything like a path, which certification rejects
-    # when it sees an absolute path in Lean's output (LLV7006).
+    # One literal per source line, so the module reads as the source does. Three things are written as bytes: a percent
+    # sign and a zero byte, both forbidden anywhere in a LexLean file, and the slash of anything like a path, which
+    # certification rejects when it sees an absolute path in Lean's output (LLV7006).
     parts = []
     for line in data.decode().splitlines(keepends=True):
-        for piece in re.split(rb"(%|/(?=[A-Za-z0-9._~$-]))", line.encode()):
-            if piece in (b"%", b"/"):
+        for piece in re.split(rb"(%|\x00|/(?=[A-Za-z0-9._~$-]))", line.encode()):
+            if piece in (b"%", b"/", b"\x00"):
                 parts.append("0x" + piece.hex())
             elif piece:
                 parts.append(text(piece))

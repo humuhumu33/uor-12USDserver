@@ -4,6 +4,7 @@ set -uo pipefail
 repo="$PWD"
 project="$repo/emit/work"
 out="$repo/emit/out"
+bad=0
 mkdir -p "$out"
 
 # Takes the exact axiom sets LexLean reports, because each definition's policy must name them exactly.
@@ -46,9 +47,9 @@ for pass in $(seq 1 40); do
   tail -c 300 verify.err
   cd "$repo" || exit 1
   [ "$code" = 0 ] && break
-  learn_axioms "$project/verify.json" || exit 0
+  learn_axioms "$project/verify.json" || exit 1
 done
-[ "$code" = 0 ] || exit 0
+[ "$code" = 0 ] || exit 1
 
 for pass in $(seq 1 10); do
   cd "$project" || exit 1
@@ -67,10 +68,10 @@ PY
   tail -c 300 production.err
   cd "$repo" || exit 1
   [ "$code" = 0 ] && break
-  learn_axioms "$project/production.json" || exit 0
+  learn_axioms "$project/production.json" || exit 1
   generate
 done
-[ "$code" = 0 ] || exit 0
+[ "$code" = 0 ] || exit 1
 
 cd "$project" || exit 1
 wc -c src/Emit.lex.tex
@@ -87,8 +88,10 @@ cp "$project/emitted/src/core.h" "$out/core.h"
 cp emit/axioms.json "$out/axioms.json"
 cp "$project/src/Emit.lex.tex" "$out/Emit.lex.tex"
 for name in src/core.h src/server.c build.sh install.sh start.sh .gitignore README.md; do
-  if cmp "server/$name" "$project/emitted/$name"; then echo "IDENTICAL $name $(sha256sum < "$project/emitted/$name" | cut -c1-16)"; else echo "DIFFERENT $name"; fi
+  if cmp "server/$name" "$project/emitted/$name"; then echo "IDENTICAL $name $(sha256sum < "$project/emitted/$name" | cut -c1-16)"; else echo "DIFFERENT $name"; bad=1; fi
 done
 cc -std=gnu11 -Wall -Wextra -I"$project/emitted/src" -o "$project/core_test" emit/core_test.c && "$project/core_test"
-echo "CORETEST exit $?"
-exit 0
+result=$?
+echo "CORETEST exit $result"
+[ "$result" = 0 ] || bad=1
+exit "$bad"
