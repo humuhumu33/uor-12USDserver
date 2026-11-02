@@ -15,8 +15,9 @@ echo "MODULE build exit $?"
 cp "$(find "$project/emit" -name Emit.lean -not -path '*/.lake/*' | head -1)" "$out/lean/UorEmit/Emit.lean"
 
 cp -r "$vendor/language/runtime-1.2/library" "$project/runtime"
+chmod -R u+w "$project/runtime"
 cat "$project/runtime/lexlean.toml" | head -14 | cut -c1-110
-(cd "$project/runtime" && lexlean lock > /dev/null 2>&1; lexlean build 2>&1 | tail -3 | cut -c1-300)
+(cd "$project/runtime" && lexlean lock 2>&1 | tail -2 | cut -c1-300; lexlean build 2>&1 | tail -3 | cut -c1-300)
 echo "RUNTIME build exit $?"
 find "$project/runtime" -name '*.lean' -not -path '*/.lake/*' | head -12
 (cd "$project/runtime" && find . -name '*.lean' -not -path '*/.lake/*' | while read -r file; do
