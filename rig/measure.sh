@@ -66,6 +66,20 @@ rm -f "$samples"
 sample_memory() {
   awk -v current="$(cat "$cgroup/memory.current" 2> /dev/null)" '$1 ~ /^(anon|file|sock|slab)$/ {printf "%s=%.0f ", $1, $2 / 1048576} END {printf "total=%.0f\n", current / 1048576}' "$cgroup/memory.stat" >> "$samples" 2> /dev/null
 }
+# When socket memory jumps, says whose bytes they are: requests the server hasn't read, responses the client hasn't
+# acknowledged, or responses the load generator hasn't read. Also how much CPU the load generator is getting.
+last_load_ticks=0
+split_sockets() {
+  local sock ticks
+  sock=$(awk '$1 == "sock" {printf "%d", $2 / 1048576}' "$cgroup/memory.stat" 2> /dev/null)
+  ticks=$(awk '{print $14 + $15}' "/proc/$load/stat" 2> /dev/null)
+  if [ "${sock:-0}" -gt 40 ]; then
+    ss -Htn state established 2> /dev/null | awk -v port=":$port" -v sock="$sock" -v load_cpu="$((${ticks:-0} - last_load_ticks))" '
+      { if ($3 ~ port "$") { server_recv += $1; server_send += $2 } else if ($4 ~ port "$") { client_recv += $1; client_send += $2 } }
+      END { printf "SOCKETS sock=%d server_unread_mb=%.0f server_unacked_mb=%.0f client_unread_mb=%.0f client_unacked_mb=%.0f load_ticks=%d\n", sock, server_recv / 1048576, server_send / 1048576, client_recv / 1048576, client_send / 1048576, load_cpu }'
+  fi
+  last_load_ticks=${ticks:-0}
+}
 memory_peaks() {
   awk '{for (i = 1; i <= NF; i++) {split($i, kv, "="); if (kv[2] + 0 > most[kv[1]]) most[kv[1]] = kv[2] + 0}} END {printf "PEAKS"; for (k in most) printf " %s=%d", k, most[k]; printf "\n"}' "$samples" 2> /dev/null
 }
@@ -99,6 +113,7 @@ for _ in $(seq 1 "$ramp"); do
   sleep 1
   [ -f "$cgroup/cpu.stat" ] || died "during the ramp"
   sample_memory
+  split_sockets
 done
 usage_start=$(awk '/usage_usec/ {print $2}' "$cgroup/cpu.stat")
 if [ "${PROFILE:-0}" = 1 ] && command -v perf > /dev/null; then
@@ -110,6 +125,7 @@ for _ in $(seq 1 "$hold"); do
   sleep 1
   [ -f "$cgroup/cpu.stat" ] || died "during the hold"
   sample_memory
+  split_sockets
 done
 echo "MEMORY $(memory_breakdown)"
 memory_peaks

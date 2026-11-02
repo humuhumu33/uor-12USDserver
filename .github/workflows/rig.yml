@@ -60,6 +60,18 @@ jobs:
           cp -r server/. "$RUNNER_TEMP/challenge/submissions/ours-under-test/"
           cd "$RUNNER_TEMP/challenge"
           bash test/run.sh submissions/ours-under-test 2>&1 | tail -40
+      - name: Build the poll path with today's settings
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          # The commit before the multishot receive, so the two differ only in how requests are read.
+          git worktree add -q /tmp/poll e3e97f72051fe443ac3cdea9f743b23906f0c15d
+          mkdir -p /tmp/variants
+          cp -r /tmp/poll/server /tmp/variants/v-poll
+          sed -i 's/define CHECKPOINT_NICE 10/define CHECKPOINT_NICE 19/; s/cache_size = -8192/cache_size = -32768/' /tmp/variants/v-poll/src/server.c
+          grep -q 'define CHECKPOINT_NICE 19' /tmp/variants/v-poll/src/server.c
+          grep -q 'cache_size = -32768' /tmp/variants/v-poll/src/server.c
+          bash /tmp/variants/v-poll/build.sh 2>&1 | tail -1
       - name: Build the control
         shell: bash
         run: |
@@ -76,7 +88,7 @@ jobs:
           # 73%: the quota at which the control spends the same share here at 295k as on the box (59% against 81%).
           export CPU_QUOTA=73%
           # The box's kernel costs more per socket than this one, so its memory wall comes sooner than these loads suggest.
-          for run in "ours 320000" "control 320000" "ours 340000" "control 340000" "ours 320000" "control 320000" "ours 340000" "control 340000"; do
+          for run in "ours 340000" "v-poll 340000" "ours 320000" "v-poll 320000" "ours 340000" "v-poll 340000" "ours 320000" "v-poll 320000"; do
             read -r server users <<< "$run"
             echo "=== $server at $users users"
             bash rig/measure.sh "$server" "$users" 90 150 "$RUNNER_TEMP/challenge" "$PWD/rig"
