@@ -876,6 +876,18 @@ definition{
 ESCAPE_ROWS
 
 definition{
+  name: wordEscapeText,
+  parameters: [],
+  result: Bytes,
+  body: (cat4
+    (cat3 T"// Carried text, with no theorem: the core test checks every byte in every lane.\n" T"static inline int word_needs_escape(uint64_t word) {\n" T"    const uint64_t low7 = 0x7f7f7f7f7f7f7f7fULL;\n")
+    (cat3 T"    uint64_t quote = word ^ 0x2222222222222222ULL, slash = word ^ 0x5c5c5c5c5c5c5c5cULL, control = word & 0xe0e0e0e0e0e0e0e0ULL;\n" T"#define HAS_ZERO(x) (~((((x) & low7) + low7) | (x) | low7))\n" T"    return (HAS_ZERO(quote) | HAS_ZERO(slash) | HAS_ZERO(control)) != 0;\n")
+    T"}\n"
+    T""),
+  executable: true
+}
+
+definition{
   name: coreHeader,
   parameters: [],
   result: Bytes,
@@ -883,6 +895,6 @@ definition{
     (cat4 T"// Written by the certified LexLean root. The theorems about these tables are in the same module.\n" (batchNames) (batchTables) (routeNames))
     (cat3 (routeTables) (flowTables) (failureTable))
     (escapeNames)
-    (cat3 T"static const uint8_t ESCAPE_CLASS[256] = {\n" (escapeTable) T"};\n")),
+    (cat4 T"static const uint8_t ESCAPE_CLASS[256] = {\n" (escapeTable) T"};\n" (wordEscapeText))),
   executable: true
 }

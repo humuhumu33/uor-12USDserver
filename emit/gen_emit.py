@@ -3,9 +3,6 @@
 
 The proved core comes from core.lex; its tables are computed by the root. The rest of the server is carried as text.
 Each file in the archive is its path, a newline, its bytes, and a zero byte.
-
-    gen_emit.py SERVER_DIR PROJECT_DIR          the whole server
-    gen_emit.py --core-only SERVER_DIR PROJECT_DIR   only the core, for quick proof runs
 """
 import json
 import pathlib
@@ -17,12 +14,8 @@ APPENDS = 16
 FILES = ["src/server.c", "build.sh", "install.sh", "start.sh", ".gitignore", "README.md"]
 HERE = pathlib.Path(__file__).parent
 
-arguments = sys.argv[1:]
-core_only = "--core-only" in arguments
-if core_only:
-    arguments.remove("--core-only")
-source = pathlib.Path(arguments[0])
-root = pathlib.Path(arguments[1])
+source = pathlib.Path(sys.argv[1])
+root = pathlib.Path(sys.argv[2])
 
 
 def text(piece):
@@ -98,13 +91,11 @@ core = re.sub(r'T"((?:[^"\\]|\\.)*)"', lambda m: f'(prim utf8_encode "{m.group(1
 axioms_path = HERE / "axioms.json"
 axioms = json.loads(axioms_path.read_text()) if axioms_path.exists() else {}
 
-parts = []
 archive = b""
-if not core_only:
-    for name in FILES:
-        content = (source / name).read_bytes()
-        archive += name.encode() + b"\n" + content + b"\0"
-    parts = literals(archive)
+for name in FILES:
+    content = (source / name).read_bytes()
+    archive += name.encode() + b"\n" + content + b"\0"
+parts = literals(archive)
 
 sections = ""
 for start in range(0, len(parts), APPENDS):

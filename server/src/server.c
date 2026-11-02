@@ -4,6 +4,7 @@
 // transport and drain-first batching follow lessons published by c-iouring-pavlyhalim (#245, MIT).
 #define _GNU_SOURCE
 #include "sqlite3.c"
+#include "core.h"
 #include <arpa/inet.h>
 #include <liburing.h>
 #include <netinet/in.h>
@@ -527,7 +528,7 @@ static int wal_hook(void *arg, sqlite3 *d, const char *name, int frames) {
     wal_frames = frames;
     if ((uint64_t)frames > stat_frames_most) stat_frames_most = (uint64_t)frames;
     __atomic_store_n(&commit_number, commit_number + 1, __ATOMIC_RELEASE);
-    if (frames >= WAL_GATE_FRAMES && !wal_gate) {
+    if (GATE_NEXT[(wal_gate ? 8 : 0) | (frames >= WAL_GATE_FRAMES ? 4 : 0)] && !wal_gate) {
         wal_gate_since = monotonic_nanoseconds();
         __atomic_store_n(&wal_gate, 1, __ATOMIC_RELEASE);
         stat_gates++;
@@ -571,10 +572,10 @@ static void *checkpoint_main(void *arg) {
 
 // True once writes may go on. Every frame is in the database file, or the wait has gone on too long.
 static int wal_gate_opens(void) {
-    if (__atomic_load_n(&checkpointed_commit, __ATOMIC_ACQUIRE) == commit_number) return 1;
-    if (monotonic_nanoseconds() - wal_gate_since < WAL_GATE_NANOSECONDS) return 0;
-    stat_gate_timeouts++;
-    return 1;
+    int copied = __atomic_load_n(&checkpointed_commit, __ATOMIC_ACQUIRE) == commit_number;
+    int timed_out = !copied && monotonic_nanoseconds() - wal_gate_since >= WAL_GATE_NANOSECONDS;
+    if (timed_out) stat_gate_timeouts++;
+    return !GATE_NEXT[8 | (copied ? 2 : 0) | (timed_out ? 1 : 0)];
 }
 
 /* SQLite writes each WAL frame as two calls, the 24-byte header and then the page. This keeps the frames of a
@@ -950,13 +951,6 @@ static inline char *put_int(char *o, int64_t v) {
     return o;
 }
 
-static inline int word_needs_escape(uint64_t word) {
-    const uint64_t low7 = 0x7f7f7f7f7f7f7f7fULL;
-    uint64_t quote = word ^ 0x2222222222222222ULL, slash = word ^ 0x5c5c5c5c5c5c5c5cULL, control = word & 0xe0e0e0e0e0e0e0e0ULL;
-#define HAS_ZERO(x) (~((((x) & low7) + low7) | (x) | low7))
-    return (HAS_ZERO(quote) | HAS_ZERO(slash) | HAS_ZERO(control)) != 0;
-}
-
 static char *put_escaped(char *o, const uint8_t *s, uint32_t n) {
     uint32_t i = 0;
     while (i + 8 <= n) {
@@ -969,15 +963,19 @@ static char *put_escaped(char *o, const uint8_t *s, uint32_t n) {
     }
     for (; i < n; i++) {
         uint8_t c = s[i];
-        if (c == '"' || c == '\\') {
+        switch (ESCAPE_CLASS[c]) {
+        case ESCAPE_BACKSLASH:
             *o++ = '\\';
             *o++ = (char)c;
-        } else if (c < 0x20) {
+            break;
+        case ESCAPE_UNICODE: {
             static const char hex[] = "0123456789abcdef";
             o = PUT(o, "\\u00");
             *o++ = hex[c >> 4];
             *o++ = hex[c & 15];
-        } else {
+            break;
+        }
+        default:
             *o++ = (char)c;
         }
     }
@@ -1015,21 +1013,12 @@ static const char *error_500;
 static uint32_t error_500_len;
 
 typedef struct { const char *text; uint32_t len; } Canned;
-enum { E_NOT_FOUND, E_BAD_ID, E_POST_MISSING, E_NO_BEARER, E_BAD_TOKEN, E_BAD_PAYLOAD, E_BAD_JSON, E_NO_BODY, E_LONG_BODY, E_INTERNAL, E_COUNT };
 static Canned canned[E_COUNT];
 
 static void canned_setup(void) {
     static const struct { int status; const char *reason, *message; } table[E_COUNT] = {
-        {404, "Not Found", "not found"},
-        {400, "Bad Request", "invalid post id"},
-        {404, "Not Found", "post not found"},
-        {401, "Unauthorized", "missing bearer token"},
-        {401, "Unauthorized", "invalid or expired token"},
-        {401, "Unauthorized", "invalid token payload"},
-        {400, "Bad Request", "malformed JSON body"},
-        {400, "Bad Request", "body is required"},
-        {400, "Bad Request", "body must be at most 500 characters"},
-        {500, "Internal Server Error", "internal server error"},
+        FAILURE_ROW_0, FAILURE_ROW_1, FAILURE_ROW_2, FAILURE_ROW_3, FAILURE_ROW_4,
+        FAILURE_ROW_5, FAILURE_ROW_6, FAILURE_ROW_7, FAILURE_ROW_8, FAILURE_ROW_9,
     };
     for (int i = 0; i < E_COUNT; i++) {
         char body[128], *text = malloc(320);
@@ -1382,6 +1371,19 @@ static const char *find_header(const char *headers, const char *end, const char 
     return NULL;
 }
 
+static inline int path_shape(const char *path, size_t n) {
+    if (n == 5 && !memcmp(path, "/feed", 5)) return SHAPE_FEED;
+    if (n == 7 && !memcmp(path, "/health", 7)) return SHAPE_HEALTH;
+    if (n == 6 && !memcmp(path, "/posts", 6)) return SHAPE_POSTS;
+    if (n > 7 && !memcmp(path, "/posts/", 7)) {
+        const char *rest = path + 7;
+        size_t rest_len = n - 7;
+        if (!memchr(rest, '/', rest_len)) return SHAPE_POST_ID;
+        if (rest_len > 5 && !memcmp(rest + rest_len - 5, "/like", 5)) return SHAPE_POST_LIKE;
+    }
+    return SHAPE_UNKNOWN;
+}
+
 // Routes one complete request. Returns its total length, 0 when more bytes are needed.
 static uint32_t parse_request(Request *r, const char *data, uint32_t n) {
     const char *end = memmem(data, n, "\r\n\r\n", 4);
@@ -1414,44 +1416,41 @@ static uint32_t parse_request(Request *r, const char *data, uint32_t n) {
     const char *query = memchr(path, '?', (size_t)(path_end - path));
     if (query) path_end = query;
     size_t path_len = (size_t)(path_end - path);
-    int is_get = method_len == 3 && !memcmp(data, "GET", 3);
-    int is_post = method_len == 4 && !memcmp(data, "POST", 4);
-    if (is_get && path_len == 5 && !memcmp(path, "/feed", 5)) {
-        r->kind = K_FEED;
-        return total;
-    }
-    if (is_get && path_len == 7 && !memcmp(path, "/health", 7)) {
-        r->kind = K_HEALTH;
-        return total;
-    }
-    if (path_len > 7 && !memcmp(path, "/posts/", 7)) {
-        const char *rest = path + 7;
-        size_t rest_len = path_len - 7;
-        if (is_get && !memchr(rest, '/', rest_len)) {
-            if (parse_id(rest, rest_len, &r->id)) respond_error(r, E_BAD_ID);
-            else r->kind = K_POST;
-            return total;
-        }
-        if (is_post && rest_len > 5 && !memcmp(rest + rest_len - 5, "/like", 5)) {
-            size_t auth_len = 0;
-            const char *auth = find_header(headers, end + 2, "authorization", 13, &auth_len);
-            int failure = authenticate(r, auth, auth_len);
-            if (failure >= 0) respond_error(r, failure);
-            else if (parse_id(rest, rest_len - 5, &r->id)) respond_error(r, E_BAD_ID);
-            else r->kind = K_LIKE;
-            return total;
-        }
-    }
-    if (is_post && path_len == 6 && !memcmp(path, "/posts", 6)) {
+    int method = method_len == 3 && !memcmp(data, "GET", 3) ? METHOD_GET : method_len == 4 && !memcmp(data, "POST", 4) ? METHOD_POST : METHOD_OTHER;
+    int route = ROUTE_OF[method][path_shape(path, path_len)];
+    if (ROUTE_NEEDS_TOKEN[route]) {
         size_t auth_len = 0;
         const char *auth = find_header(headers, end + 2, "authorization", 13, &auth_len);
         int failure = authenticate(r, auth, auth_len);
-        if (failure < 0) failure = parse_body(r, body, content);
+        if (failure >= 0) {
+            respond_error(r, failure);
+            return total;
+        }
+    }
+    switch (route) {
+    case ROUTE_FEED:
+        r->kind = K_FEED;
+        break;
+    case ROUTE_HEALTH:
+        r->kind = K_HEALTH;
+        break;
+    case ROUTE_POST:
+        if (parse_id(path + 7, path_len - 7, &r->id)) respond_error(r, E_BAD_ID);
+        else r->kind = K_POST;
+        break;
+    case ROUTE_LIKE:
+        if (parse_id(path + 7, path_len - 12, &r->id)) respond_error(r, E_BAD_ID);
+        else r->kind = K_LIKE;
+        break;
+    case ROUTE_CREATE: {
+        int failure = parse_body(r, body, content);
         if (failure >= 0) respond_error(r, failure);
         else r->kind = K_CREATE;
-        return total;
+        break;
     }
-    respond_error(r, E_NOT_FOUND);
+    default:
+        respond_error(r, E_NOT_FOUND);
+    }
     return total;
 }
 
@@ -1841,18 +1840,29 @@ static void hold_request(Request *r) {
 }
 
 static inline int should_hold(const Request *r) {
-    if (held_count >= HOLD_CAP || r->kind == K_HELD) return 0;
-    if (__atomic_load_n(&wal_gate, __ATOMIC_RELAXED) && (r->kind == K_CREATE || r->kind == K_LIKE)) return 1;
-    // A later request on a connection must not overtake one that is held.
+    if (r->kind == K_HELD) return 0;
     const Conn *c = &rings[r->ring].conns[r->slot];
-    return c->held && c->generation == r->generation;
+    int room = held_count < HOLD_CAP;
+    int gate_closed = __atomic_load_n(&wal_gate, __ATOMIC_RELAXED);
+    int write = r->kind == K_CREATE || r->kind == K_LIKE;
+    int connection_held = c->held && c->generation == r->generation;
+    return SHOULD_HOLD[(room ? 8 : 0) | (gate_closed ? 4 : 0) | (write ? 2 : 0) | (connection_held ? 1 : 0)];
+}
+
+static int batch_phase = PHASE_IDLE;
+
+// The certified tables decide what follows each step of a batch, and only their answers lead to a send.
+static inline int batch_step(int event) {
+    int action = ACTION_OF[batch_phase][event];
+    batch_phase = NEXT_PHASE[batch_phase][event];
+    return action;
 }
 
 // One SQLite transaction: reads from the batch's snapshot, then writes, then COMMIT, then every response.
 // When response memory runs out, the requests past that point wait for the next batch, in order.
 static uint32_t run_list(Request *list, uint32_t count, int may_hold) {
-    int database_failed = 0;
     uint32_t limit = count;
+    batch_step(EVENT_REQUEST);
     for (uint32_t i = 0; i < limit; i++) {
         Request *r = &list[i];
         if (UNLIKELY(may_hold) && should_hold(r)) {
@@ -1889,11 +1899,13 @@ static uint32_t run_list(Request *list, uint32_t count, int may_hold) {
             r->failed = 1;
         }
     }
-    if (batch_end()) database_failed = 1;
+    int commit_failed = batch_step(EVENT_BATCH_END) != ACTION_COMMIT || batch_end();
+    int action = batch_step(commit_failed ? EVENT_COMMIT_FAIL : EVENT_COMMIT_OK);
+    if (UNLIKELY(action != ACTION_SEND_ALL && action != ACTION_FAIL_ALL)) die("a batch ended without a send or a failure");
     for (uint32_t i = 0; i < limit; i++) {
         Request *r = &list[i];
         if (r->kind == K_HELD) continue;
-        if (database_failed && r->kind != K_CONST) respond_error(r, E_INTERNAL);
+        if (action == ACTION_FAIL_ALL && r->kind != K_CONST) respond_error(r, E_INTERNAL);
         prepare_send(r);
     }
     return limit;

@@ -9,16 +9,21 @@ permissions:
 jobs:
   emit:
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-      - name: Emit the server from LexLean
+      - name: Prove the core, certify the root, compare what it writes
         shell: bash
         run: |
           image=$(sed -n 's/.*"sdk_image":"\([^"]*\)".*/\1/p' prismpm.lock)
           chmod -R a+rwX emit feasibility server
           docker run --rm --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,exec,nosuid,size=4g \
             --volume "$PWD:$PWD" --workdir "$PWD" --env HOME=/tmp/home "$image" \
-            bash -c 'mkdir -p "$HOME"; bash emit/sdk-emit.sh' 2>&1 | cut -c1-1200
+            bash -c 'mkdir -p "$HOME"; bash emit/sdk-emit.sh' 2>&1 | cut -c1-1300
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: emit
+          path: emit/out

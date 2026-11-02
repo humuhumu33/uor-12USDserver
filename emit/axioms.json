@@ -1,0 +1,155 @@
+{
+"a_backslash_is_escaped": [
+"Quot.sound",
+"propext"
+],
+"a_closed_gate_holds_writes": [
+"propext"
+],
+"a_full_hold_queue_holds_nothing": [
+"propext"
+],
+"a_held_connection_keeps_its_order": [
+"propext"
+],
+"a_quote_is_escaped": [
+"Quot.sound",
+"propext"
+],
+"a_space_is_plain": [
+"Quot.sound",
+"propext"
+],
+"a_timeout_always_opens_the_gate": [
+"propext"
+],
+"an_open_gate_holds_nothing_new": [
+"propext"
+],
+"coreHeader": [
+"Quot.sound",
+"propext"
+],
+"emitSource": [
+"Quot.sound",
+"propext"
+],
+"escapeCell": [
+"Quot.sound",
+"propext"
+],
+"escapeClass": [
+"Quot.sound",
+"propext"
+],
+"escapeRow0": [
+"Quot.sound",
+"propext"
+],
+"escapeRow1": [
+"Quot.sound",
+"propext"
+],
+"escapeRow10": [
+"Quot.sound",
+"propext"
+],
+"escapeRow11": [
+"Quot.sound",
+"propext"
+],
+"escapeRow12": [
+"Quot.sound",
+"propext"
+],
+"escapeRow13": [
+"Quot.sound",
+"propext"
+],
+"escapeRow14": [
+"Quot.sound",
+"propext"
+],
+"escapeRow15": [
+"Quot.sound",
+"propext"
+],
+"escapeRow2": [
+"Quot.sound",
+"propext"
+],
+"escapeRow3": [
+"Quot.sound",
+"propext"
+],
+"escapeRow4": [
+"Quot.sound",
+"propext"
+],
+"escapeRow5": [
+"Quot.sound",
+"propext"
+],
+"escapeRow6": [
+"Quot.sound",
+"propext"
+],
+"escapeRow7": [
+"Quot.sound",
+"propext"
+],
+"escapeRow8": [
+"Quot.sound",
+"propext"
+],
+"escapeRow9": [
+"Quot.sound",
+"propext"
+],
+"escapeTable": [
+"Quot.sound",
+"propext"
+],
+"every_write_needs_a_token": [
+"propext"
+],
+"fail_only_after_failed_commit": [
+"propext"
+],
+"only_an_internal_failure_is_a_server_error": [
+"propext"
+],
+"only_post_writes": [
+"propext"
+],
+"reads_go_on_while_writes_wait": [
+"propext"
+],
+"send_only_after_commit": [
+"propext"
+],
+"the_first_control_byte_is_escaped": [
+"Quot.sound",
+"propext"
+],
+"the_gate_closes_at_the_limit": [
+"propext"
+],
+"the_gate_opens_when_the_log_is_copied": [
+"propext"
+],
+"the_gate_stays_closed_until_the_log_is_copied": [
+"propext"
+],
+"the_last_control_byte_is_escaped": [
+"Quot.sound",
+"propext"
+],
+"the_top_byte_is_plain": [
+"Quot.sound",
+"propext"
+],
+"unknown_methods_are_not_found": [
+"propext"
+]
+}
