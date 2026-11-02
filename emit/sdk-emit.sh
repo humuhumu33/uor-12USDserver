@@ -1,13 +1,17 @@
 #!/bin/bash
-# Runs inside the locked SDK image. Do the theorems hold, does the root certify, and do its files match the server's?
+# Runs inside the locked SDK image, as part of `just vv`.
+#
+# The committed module in emit/project is the source of record. This fails if it is stale, if a theorem doesn't hold,
+# if the root doesn't certify, if any file it writes differs from server/, or if the emitted tables fail their test.
+# A stale run still completes, learning axiom sets as it goes, and leaves the fresh module in emit/out to commit.
 set -uo pipefail
 repo="$PWD"
 project="$repo/emit/work"
 out="$repo/emit/out"
 bad=0
 mkdir -p "$out"
+FILES="src/core.h src/server.c build.sh install.sh start.sh .gitignore README.md"
 
-# Takes the exact axiom sets LexLean reports, because each definition's policy must name them exactly.
 learn_axioms() {
   python3 - "$1" "$repo/emit/axioms.json" <<'PY'
 import json, pathlib, re, sys
@@ -33,21 +37,33 @@ PY
 generate() {
   rm -rf "$project"
   mkdir -p "$project"
-  python3 emit/gen_emit.py server "$project"
-  (cd "$project" && lexlean lock > /dev/null)
+  cp emit/project/lexlean.toml emit/project/lean-toolchain emit/project/lakefile.toml emit/project/lake-manifest.json "$project/"
+  python3 emit/gen_emit.py server "$project" || exit 1
+  (cd "$project" && lexlean fmt && lexlean lock > /dev/null) || exit 1
 }
 
+is_fresh() {
+  cmp -s "$project/src/Emit.lex.tex" emit/project/src/Emit.lex.tex && cmp -s "$project/lexlean.lock" emit/project/lexlean.lock
+}
+
+generate
+fresh=1
+is_fresh || fresh=0
+echo "FRESH $fresh"
+[ "$fresh" = 1 ] || bad=1
+
 for pass in $(seq 1 40); do
-  generate
   cd "$project" || exit 1
   start=$(date +%s)
   lexlean --diagnostic-format json verify > verify.json 2> verify.err
   code=$?
-  echo "VERIFY pass=$pass exit=$code seconds=$(( $(date +%s) - start )) memory_peak_mb=$(( $(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo 0) / 1048576 ))"
+  echo "VERIFY pass=$pass exit=$code seconds=$(( $(date +%s) - start ))"
   tail -c 300 verify.err
   cd "$repo" || exit 1
   [ "$code" = 0 ] && break
+  [ "$fresh" = 0 ] || { learn_axioms "$project/verify.json"; exit 1; }
   learn_axioms "$project/verify.json" || exit 1
+  generate
 done
 [ "$code" = 0 ] || exit 1
 
@@ -64,10 +80,11 @@ PY
   start=$(date +%s)
   lexlean --diagnostic-format json production build --request request.json > production.json 2> production.err
   code=$?
-  echo "PRODUCTION pass=$pass exit=$code seconds=$(( $(date +%s) - start )) memory_peak_mb=$(( $(cat /sys/fs/cgroup/memory.peak 2>/dev/null || echo 0) / 1048576 ))"
+  echo "PRODUCTION pass=$pass exit=$code seconds=$(( $(date +%s) - start ))"
   tail -c 300 production.err
   cd "$repo" || exit 1
   [ "$code" = 0 ] && break
+  [ "$fresh" = 0 ] || { learn_axioms "$project/production.json"; exit 1; }
   learn_axioms "$project/production.json" || exit 1
   generate
 done
@@ -84,14 +101,17 @@ start_ns=$(date +%s%N)
 "$project/target/release/host" "$project/emitted"
 echo "generator run ms=$(( ($(date +%s%N) - start_ns) / 1000000 ))"
 cd "$repo" || exit 1
-cp "$project/emitted/src/core.h" "$out/core.h"
+mkdir -p "$out/project/src"
+cp "$project/src/Emit.lex.tex" "$out/project/src/Emit.lex.tex"
+cp "$project/lexlean.lock" "$out/project/lexlean.lock"
 cp emit/axioms.json "$out/axioms.json"
-cp "$project/src/Emit.lex.tex" "$out/Emit.lex.tex"
-for name in src/core.h src/server.c build.sh install.sh start.sh .gitignore README.md; do
+cp "$project/emitted/src/core.h" "$out/core.h"
+for name in $FILES; do
   if cmp "server/$name" "$project/emitted/$name"; then echo "IDENTICAL $name $(sha256sum < "$project/emitted/$name" | cut -c1-16)"; else echo "DIFFERENT $name"; bad=1; fi
 done
 cc -std=gnu11 -Wall -Wextra -I"$project/emitted/src" -o "$project/core_test" emit/core_test.c && "$project/core_test"
 result=$?
 echo "CORETEST exit $result"
 [ "$result" = 0 ] || bad=1
+echo "GATE bad=$bad"
 exit "$bad"

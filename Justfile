@@ -8,8 +8,13 @@
 default: vv
 
 # The whole gate.
-vv: fmt-check model template-check lint test deny app
+vv: fmt-check model template-check lint test deny app emit
     @echo "vv: the acceptance gate passed"
+
+# The server's proved core: the committed module is fresh, its theorems hold, its root certifies, every file it writes
+# matches server/, and the emitted tables pass their exhaustive test (`SV-01` to `SV-07`).
+emit:
+    bash emit/sdk-emit.sh
 
 fmt-check:
     cargo fmt --all -- --check

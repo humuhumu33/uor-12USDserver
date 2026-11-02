@@ -155,20 +155,4 @@ for name, observed in axioms.items():
 
 (root / "src").mkdir(parents=True, exist_ok=True)
 (root / "src" / "Emit.lex.tex").write_text(module, newline="\n")
-(root / "lean-toolchain").write_text("leanprover/lean4:v4.32.1\n", newline="\n")
-(root / "lakefile.toml").write_text('name = "uor_emit_host"\nversion = "0.1.0"\n', newline="\n")
-(root / "lake-manifest.json").write_text(
-    '{"version": "1.2.0",\n "packagesDir": ".lake/packages",\n "packages": [],\n "name": "uor_emit_host",\n'
-    ' "lakeDir": ".lake",\n "fixedToolchain": false}\n',
-    newline="\n",
-)
-config = (HERE.parent / "feasibility" / "kernels" / "lexlean.toml").read_text()
-config = (
-    config.replace('name = "uor-kernels"', 'name = "uor-emit"')
-    .replace('module_prefix = "UorKernels"', 'module_prefix = "UorEmit"')
-    .replace("src/Kernels.lex.tex", "src/Emit.lex.tex")
-    .replace("max_file_bytes = 4194304", "max_file_bytes = 67108864")
-    .replace("max_child_output_bytes = 16777216", "max_child_output_bytes = 134217728")
-)
-(root / "lexlean.toml").write_text(config, newline="\n")
 print("wrote", root, len(archive), "carried bytes in", len(parts), "literals")

@@ -24,6 +24,18 @@ model does not sanction.
 | --- | --- | --- |
 | `TC-01` | `build` | The checker answers conformant exactly when every universal policy file's observed digest equals its locked digest |
 
+## core
+
+| ID | Level | Statement |
+| --- | --- | --- |
+| `SV-01` | `build` | A response leaves only after its batch commits, and a failure response only after the commit fails |
+| `SV-02` | `build` | Only POST writes, every write needs a token, and an unknown method is not found |
+| `SV-03` | `build` | Reads go on while writes wait, and a held connection keeps its order while the hold queue has room |
+| `SV-04` | `build` | The write pause closes at its limit and opens when the log is copied or the wait times out |
+| `SV-05` | `build` | Only an internal failure is a server error |
+| `SV-06` | `build` | A quote, a backslash and the control bytes are escaped at the checked values, and the emitted table matches the rule for all 256 bytes |
+| `SV-07` | `build` | Every file in server is what the certified root writes, and the committed module is not stale |
+
 ## Cited authorities
 
 Never re-derived, vendored, or gated on.

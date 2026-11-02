@@ -26,3 +26,45 @@ id = "TC-01"
 level = "build"
 suite = "contract"
 statement = "The checker answers conformant exactly when every universal policy file's observed digest equals its locked digest"
+
+[[id]]
+id = "SV-01"
+level = "build"
+suite = "core"
+statement = "A response leaves only after its batch commits, and a failure response only after the commit fails"
+
+[[id]]
+id = "SV-02"
+level = "build"
+suite = "core"
+statement = "Only POST writes, every write needs a token, and an unknown method is not found"
+
+[[id]]
+id = "SV-03"
+level = "build"
+suite = "core"
+statement = "Reads go on while writes wait, and a held connection keeps its order while the hold queue has room"
+
+[[id]]
+id = "SV-04"
+level = "build"
+suite = "core"
+statement = "The write pause closes at its limit and opens when the log is copied or the wait times out"
+
+[[id]]
+id = "SV-05"
+level = "build"
+suite = "core"
+statement = "Only an internal failure is a server error"
+
+[[id]]
+id = "SV-06"
+level = "build"
+suite = "core"
+statement = "A quote, a backslash and the control bytes are escaped at the checked values, and the emitted table matches the rule for all 256 bytes"
+
+[[id]]
+id = "SV-07"
+level = "build"
+suite = "core"
+statement = "Every file in server is what the certified root writes, and the committed module is not stale"
