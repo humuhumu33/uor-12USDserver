@@ -68,7 +68,7 @@ jobs:
         run: |
           sudo prlimit --pid $$ --nofile=1048576:1048576
           # Near the limit, interleaved so drift on this machine hits both servers.
-          for users in 240000 300000; do
+          for users in 300000 400000; do
             for server in ours control; do
               echo "=== $server at $users users"
               bash rig/measure.sh "$server" "$users" 90 150 "$RUNNER_TEMP/challenge" "$PWD/rig"

@@ -21,8 +21,9 @@
 
 #define MAX_RINGS 8
 #define ACCEPT_LISTENERS 8
-#define RING_ENTRIES 16384
-#define RING_COMPLETIONS 65536
+// Newer kernels charge ring memory to RLIMIT_MEMLOCK, 8 MiB under systemd: every ring must fit in an eighth of it.
+#define RING_ENTRIES 4096
+#define RING_COMPLETIONS 16384
 #define BUFFER_COUNT 4096
 #define BUFFER_SIZE 1024
 #define BUFFER_GROUP 1
@@ -1263,7 +1264,8 @@ static struct io_uring_sqe *next_sqe(Ring *ring) {
     return s;
 }
 
-static void ring_setup(int index) {
+// A ring that can't be made costs the connections it would have held, not the ones already open.
+static int ring_setup(int index) {
     Ring *ring = &rings[index];
     struct io_uring_params params;
     memset(&params, 0, sizeof params);
@@ -1271,34 +1273,38 @@ static void ring_setup(int index) {
     params.cq_entries = RING_COMPLETIONS;
     int rc = io_uring_queue_init_params(RING_ENTRIES, &ring->ring, &params);
     if (rc < 0) {
-        fprintf(stderr, "io_uring_queue_init: %s\n", strerror(-rc));
-        exit(1);
+        fprintf(stderr, "ring %d, io_uring_queue_init: %s\n", index, strerror(-rc));
+        return -1;
     }
     rc = io_uring_register_files_sparse(&ring->ring, table_size);
     if (rc < 0) {
-        fprintf(stderr, "register_files_sparse(%u): %s\n", table_size, strerror(-rc));
-        exit(1);
+        fprintf(stderr, "ring %d, register_files_sparse(%u): %s\n", index, table_size, strerror(-rc));
+        io_uring_queue_exit(&ring->ring);
+        return -1;
+    }
+    int error = 0;
+    ring->buffers = io_uring_setup_buf_ring(&ring->ring, BUFFER_COUNT, BUFFER_GROUP, 0, &error);
+    if (!ring->buffers) {
+        fprintf(stderr, "ring %d, buffer ring: %s\n", index, strerror(-error));
+        io_uring_queue_exit(&ring->ring);
+        return -1;
+    }
+    if (index > 0 && io_uring_register_eventfd(&ring->ring, wake_fd) < 0) {
+        fprintf(stderr, "ring %d, register eventfd\n", index);
+        io_uring_queue_exit(&ring->ring);
+        return -1;
     }
     ring->conns = calloc(table_size, sizeof(Conn));
     ring->read_queue = malloc(table_size * sizeof(uint32_t));
     ring->memory = aligned_alloc(4096, BUFFER_COUNT * BUFFER_SIZE);
     if (!ring->conns || !ring->read_queue || !ring->memory) die("ring memory");
     memset(ring->memory, 0, BUFFER_COUNT * BUFFER_SIZE);
-    int error = 0;
-    ring->buffers = io_uring_setup_buf_ring(&ring->ring, BUFFER_COUNT, BUFFER_GROUP, 0, &error);
-    if (!ring->buffers) {
-        fprintf(stderr, "buffer ring: %s\n", strerror(-error));
-        exit(1);
-    }
     for (int i = 0; i < BUFFER_COUNT; i++) io_uring_buf_ring_add(ring->buffers, ring->memory + i * BUFFER_SIZE, BUFFER_SIZE, (unsigned short)i, BUFFER_COUNT - 1, i);
     io_uring_buf_ring_advance(ring->buffers, BUFFER_COUNT);
     ring->free_buffers = BUFFER_COUNT;
     ring->table = table_size;
     ring->ready = 1;
-    if (index > 0) {
-        rc = io_uring_register_eventfd(&ring->ring, wake_fd);
-        if (rc < 0) die("register eventfd");
-    }
+    return 0;
 }
 
 static void arm_accepts(int index) {
@@ -1401,7 +1407,7 @@ static void submit_all(void) {
     }
 }
 
-static int active_ring;
+static int active_ring, out_of_rings;
 
 static void on_accept(int index, struct io_uring_cqe *cqe) {
     Ring *ring = &rings[index];
@@ -1410,13 +1416,14 @@ static void on_accept(int index, struct io_uring_cqe *cqe) {
         ring->conns[slot].state = C_OPEN;
         ring->open++;
         arm_poll(index, slot);
-        if (index == active_ring && ring->open + 8192 >= ring->table && active_ring + 1 < MAX_RINGS) {
-            if (!rings[active_ring + 1].ready) {
-                ring_setup(active_ring + 1);
-                ring_count = active_ring + 2;
+        if (index == active_ring && ring->open + 8192 >= ring->table && active_ring + 1 < MAX_RINGS && !out_of_rings) {
+            if (rings[active_ring + 1].ready || ring_setup(active_ring + 1) == 0) {
+                if (ring_count < active_ring + 2) ring_count = active_ring + 2;
+                active_ring++;
+                arm_accepts(active_ring);
+            } else {
+                out_of_rings = 1;
             }
-            active_ring++;
-            arm_accepts(active_ring);
         }
         if (ring->accepting && ring->open + 4096 >= ring->table) stop_accepts(index);
     }
@@ -1789,7 +1796,7 @@ int main(void) {
     listen_all(host ? host : "127.0.0.1", port ? atoi(port) : 3000);
     if (train && fork() == 0) train_client(port ? atoi(port) : 3000, atoi(train));
     wake_fd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);
-    ring_setup(0);
+    if (ring_setup(0)) die("the first ring");
     ring_count = 1;
     arm_accepts(0);
     struct io_uring_sqe *wake = next_sqe(&rings[0]);
