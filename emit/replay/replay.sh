@@ -6,8 +6,10 @@ input="$(cd "$1" && pwd)"
 repo="$PWD"
 work="$RUNNER_TEMP/replay"
 rm -rf "$work"
-mkdir -p "$work"
-cp -r "$input/lean/." "$work/"
+mkdir -p "$work/LexLeanRuntime" "$work/UorEmit"
+# The module imports only Portable, so the other runtime files don't go on the box.
+cp "$input/lean/LexLeanRuntime/Portable.lean" "$work/LexLeanRuntime/"
+cp "$input/lean/UorEmit/Emit.lean" "$work/UorEmit/"
 cd "$work" || exit 1
 find . -name '*.lean' | xargs wc -c
 curl -fsSL --retry 3 -o /tmp/lean.tar.zst https://github.com/leanprover/lean4/releases/download/v4.32.1/lean-4.32.1-linux.tar.zst || exit 1
@@ -24,9 +26,11 @@ defaultTargets = ["UorEmit"]
 
 [[lean_lib]]
 name = "LexLeanRuntime"
+roots = ["LexLeanRuntime.Portable"]
 
 [[lean_lib]]
 name = "UorEmit"
+roots = ["UorEmit.Emit"]
 TOML
 cat > Write.lean <<'LEAN'
 import UorEmit.Emit
@@ -40,7 +44,7 @@ start=$(date +%s)
 limit /usr/bin/time -v lake build > build.txt 2>&1
 code=$?
 echo "BUILD exit=$code seconds=$(( $(date +%s) - start )) $(grep 'Maximum resident' build.txt | sed 's/.*: //') kB resident"
-tail -25 build.txt | grep -vE 'Maximum|Average|Page|Swaps|File system|Socket|Signals|Voluntary|Involuntary|Exit status|Percent|Major|Minor|Command|Elapsed|System time|User time' | cut -c1-300
+grep -vE 'Maximum|Average|Page size|Swaps|File system|Socket|Signals|Voluntary|Involuntary|Exit status|Percent|Major|Minor|Command|Elapsed|System time|User time' build.txt | cut -c1-300 | tail -25
 du -sh .lake 2> /dev/null
 grep -c 'theorem ' UorEmit/Emit.lean
 [ "$code" = 0 ] || exit 0
