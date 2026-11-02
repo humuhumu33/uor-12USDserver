@@ -10,7 +10,7 @@ project="$repo/emit/work"
 out="$repo/emit/out"
 bad=0
 mkdir -p "$out"
-FILES="src/core.h src/server.c build.sh install.sh start.sh .gitignore README.md"
+FILES="src/core.h src/server.c src/core_test.c build.sh install.sh start.sh .gitignore README.md"
 
 learn_axioms() {
   python3 - "$1" "$repo/emit/axioms.json" <<'PY'
@@ -109,9 +109,16 @@ cp "$project/emitted/src/core.h" "$out/core.h"
 for name in $FILES; do
   if cmp "server/$name" "$project/emitted/$name"; then echo "IDENTICAL $name $(sha256sum < "$project/emitted/$name" | cut -c1-16)"; else echo "DIFFERENT $name"; bad=1; fi
 done
-cc -std=gnu11 -Wall -Wextra -I"$project/emitted/src" -o "$project/core_test" emit/core_test.c && "$project/core_test"
+cc -std=gnu11 -Wall -Wextra -I"$project/emitted/src" -o "$project/core_test" "$project/emitted/src/core_test.c" && "$project/core_test"
 result=$?
 echo "CORETEST exit $result"
 [ "$result" = 0 ] || bad=1
+# The folder a pull request adds, checked the way the box checks it: Lean alone, and every file compared.
+bash emit/submission/sdk-export.sh > /dev/null || bad=1
+(cd emit/out/submission/lean && lake build --wfail > /dev/null && lake env lean --run Write.lean ../generated) || bad=1
+for name in $FILES; do
+  cmp "emit/out/submission/$name" "emit/out/submission/generated/$name" || bad=1
+done
+rm -rf emit/out/submission/generated emit/out/submission/lean/.lake
 echo "GATE bad=$bad"
 exit "$bad"

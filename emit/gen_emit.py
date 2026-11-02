@@ -11,7 +11,7 @@ import sys
 
 # Sixteen appends per definition keep the nesting under the semantic-module JSON recursion limit.
 APPENDS = 16
-FILES = ["src/server.c", "build.sh", "install.sh", "start.sh", ".gitignore", "README.md"]
+FILES = ["src/server.c", "src/core_test.c", "build.sh", "install.sh", "start.sh", ".gitignore", "README.md"]
 HERE = pathlib.Path(__file__).parent
 
 source = pathlib.Path(sys.argv[1])

@@ -30,6 +30,13 @@ plant() {
 EMIT='bash emit/sdk-emit.sh'
 TESTS='cargo test -q --locked -p repo-conformance --test core'
 
+# An untouched copy must pass the same tests, or a failure below could be for some other reason.
+fresh
+bash -c "$TESTS" > /tmp/plant.log 2>&1
+code=$?
+echo "UNTOUCHED tests exit=$code"
+[ "$code" = 0 ] || { tail -5 /tmp/plant.log | cut -c1-300; escaped=1; }
+
 plant send_before_commit "
 import pathlib
 p = pathlib.Path('emit/core.lex'); s = p.read_text()

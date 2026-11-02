@@ -31,7 +31,7 @@ statement = "The checker answers conformant exactly when every universal policy 
 id = "SV-01"
 level = "build"
 suite = "core"
-statement = "A response leaves only after its batch commits, and a failure response only after the commit fails"
+statement = "A batch's responses leave only after its commit, and they are replaced by failures only when the commit fails"
 
 [[id]]
 id = "SV-02"
@@ -43,7 +43,7 @@ statement = "Only POST writes, every write needs a token, and an unknown method 
 id = "SV-03"
 level = "build"
 suite = "core"
-statement = "Reads go on while writes wait, and a held connection keeps its order while the hold queue has room"
+statement = "While the hold queue has room, the hold table holds no read on a connection with nothing held, every write at a closed gate, and every later request on a held connection"
 
 [[id]]
 id = "SV-04"
@@ -55,7 +55,7 @@ statement = "The write pause closes at its limit and opens when the log is copie
 id = "SV-05"
 level = "build"
 suite = "core"
-statement = "Only an internal failure is a server error"
+statement = "In the failure table, only an internal failure is a server error"
 
 [[id]]
 id = "SV-06"
@@ -73,4 +73,4 @@ statement = "Every file in server is what the certified root writes, and the com
 id = "SV-08"
 level = "build"
 suite = "core"
-statement = "The box's build checks the theorems and writes the C with official Lean alone, and stops on a false theorem, a sorry or an edited file"
+statement = "The box's build checks the theorems and every file with official Lean alone, and stops on a false, weakened or deleted theorem, a sorry, an added axiom or an edited file"

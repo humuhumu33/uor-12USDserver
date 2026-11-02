@@ -2,7 +2,7 @@ name: plant
 on:
   push:
     branches: ['server/users-held']
-    paths: ['emit/plant.sh', '.github/workflows/plant.yml']
+    paths: ['emit/plant.sh', 'emit/sdk-emit.sh', 'crates/conformance/tests/core.rs', '.github/workflows/plant.yml']
   workflow_dispatch:
 permissions:
   contents: read

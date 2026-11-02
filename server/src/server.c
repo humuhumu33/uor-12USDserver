@@ -616,24 +616,24 @@ static int wal_write(sqlite3_file *f, const void *data, int n, sqlite3_int64 at)
     WalBuffer *b = wal_buffer(f);
     int follows = at == b->end;
     b->end = at + n;
+    if (n == WAL_FRAME_HEADER) {
+        // Bytes 4-7 of a frame header hold the database size on a commit frame and zero on any other.
+        const unsigned char *h = data;
+        b->commit_next = (h[4] | h[5] | h[6] | h[7]) != 0;
+    }
     if (!b->data) b->data = malloc(WAL_BUFFER_SIZE);
     int rc;
     if (!follows || !b->data || n > WAL_BUFFER_SIZE) {
         // The WAL header after a restart, or a frame rewritten in place.
-        b->commit_next = 0;
         if ((rc = wal_flush(f))) return rc;
+        if (n != WAL_FRAME_HEADER) b->commit_next = 0;
         return plain_methods->xWrite(f, data, n, at);
     }
     if (b->len + n > WAL_BUFFER_SIZE && (rc = wal_flush(f))) return rc;
     if (!b->len) b->start = at;
     memcpy(b->data + b->len, data, (size_t)n);
     b->len += n;
-    if (n == WAL_FRAME_HEADER) {
-        // Bytes 4-7 of a frame header hold the database size on a commit frame and zero on any other.
-        const unsigned char *h = data;
-        b->commit_next = (h[4] | h[5] | h[6] | h[7]) != 0;
-        return SQLITE_OK;
-    }
+    if (n == WAL_FRAME_HEADER) return SQLITE_OK;
     if (b->commit_next) {
         b->commit_next = 0;
         return wal_flush(f);
@@ -1394,8 +1394,8 @@ static uint32_t parse_request(Request *r, const char *data, uint32_t n) {
     headers = headers ? headers + 1 : end;
     size_t length_len = 0;
     const char *length_text = find_header(headers, end + 2, "content-length", 14, &length_len);
-    uint32_t content = length_text ? (uint32_t)strtoul(length_text, NULL, 10) : 0;
-    uint32_t total = (uint32_t)(end + 4 - data) + content;
+    uint64_t content = length_text ? strtoul(length_text, NULL, 10) : 0;
+    uint64_t total = (uint64_t)(end + 4 - data) + content;
     if (total > n) return 0;
     const char *body = end + 4;
     size_t connection_len = 0;
@@ -1639,7 +1639,8 @@ static void on_accept(int index, struct io_uring_cqe *cqe) {
         ring->conns[slot].state = C_OPEN;
         ring->open++;
         arm_recv(index, slot);
-        if (index == active_ring && ring->open + 8192 >= ring->table && active_ring + 1 < MAX_RINGS && !out_of_rings) {
+        uint32_t margin = ring->table / 8 < 4096 ? ring->table / 8 : 4096;
+        if (index == active_ring && ring->open + 2 * margin >= ring->table && active_ring + 1 < MAX_RINGS && !out_of_rings) {
             if (rings[active_ring + 1].ready || ring_setup(active_ring + 1) == 0) {
                 if (ring_count < active_ring + 2) ring_count = active_ring + 2;
                 active_ring++;
@@ -1648,7 +1649,7 @@ static void on_accept(int index, struct io_uring_cqe *cqe) {
                 out_of_rings = 1;
             }
         }
-        if (ring->accepting && ring->open + 4096 >= ring->table) stop_accepts(index);
+        if (ring->accepting && ring->open + margin >= ring->table) stop_accepts(index);
     }
     if (!(cqe->flags & IORING_CQE_F_MORE) && ring->accepting) {
         uint32_t listener = (uint32_t)(io_uring_cqe_get_data64(cqe) & 0xffffffff);
@@ -1766,6 +1767,8 @@ static int drain_ring(int index) {
         }
         case OP_SEND:
             if (arena >= 0) arenas[arena].pending--;
+            // From a connection this slot no longer holds.
+            if ((uint8_t)(data >> 32) != (uint8_t)c->generation) break;
             if (c->sends) c->sends--;
             if (cqe->res < 0 || (c->close_after && !c->sends)) close_conn(index, slot);
             break;
@@ -1822,7 +1825,7 @@ static void prepare_send(Request *r) {
     struct io_uring_sqe *s = next_sqe(ring);
     io_uring_prep_send(s, (int)r->slot, r->response, r->response_len, MSG_WAITALL | MSG_NOSIGNAL);
     s->flags |= IOSQE_FIXED_FILE;
-    io_uring_sqe_set_data64(s, encode(OP_SEND, r->ring, r->arena, r->slot));
+    io_uring_sqe_set_data64(s, encode(OP_SEND, r->ring, r->arena, r->slot) | (uint64_t)(uint8_t)c->generation << 32);
     if (r->arena >= 0) arenas[r->arena].pending++;
     c->sends++;
     if (r->close) c->close_after = 1;
@@ -1892,7 +1895,8 @@ static uint32_t run_list(Request *list, uint32_t count, int may_hold) {
     }
     for (uint32_t i = 0; i < limit; i++) {
         Request *r = &list[i];
-        if (UNLIKELY(!response_room())) {
+        // Only a write needs room here. Cutting at a read would throw away what the first pass answered.
+        if ((r->kind == K_CREATE || r->kind == K_LIKE) && UNLIKELY(!response_room())) {
             limit = i;
             break;
         }
@@ -2049,7 +2053,7 @@ static void train_client(int port, int total) {
             int n, r = sent % 100;
             int post = 1 + (sent * 31) % 50000;
             size_t t;
-            const char *common = "Host: bench\r\nUser-Agent: k6/1.0 (https://k6.io/)\r\n";
+            const char *common = "Host: bench\r\nUser-Agent: profile-training\r\n";
             if (r < 46) {
                 n = snprintf(text, sizeof text, "GET /feed HTTP/1.1\r\n%s\r\n", common);
             } else if (r < 92) {

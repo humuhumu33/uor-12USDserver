@@ -28,14 +28,14 @@ model does not sanction.
 
 | ID | Level | Statement |
 | --- | --- | --- |
-| `SV-01` | `build` | A response leaves only after its batch commits, and a failure response only after the commit fails |
+| `SV-01` | `build` | A batch's responses leave only after its commit, and they are replaced by failures only when the commit fails |
 | `SV-02` | `build` | Only POST writes, every write needs a token, and an unknown method is not found |
-| `SV-03` | `build` | Reads go on while writes wait, and a held connection keeps its order while the hold queue has room |
+| `SV-03` | `build` | While the hold queue has room, the hold table holds no read on a connection with nothing held, every write at a closed gate, and every later request on a held connection |
 | `SV-04` | `build` | The write pause closes at its limit and opens when the log is copied or the wait times out |
-| `SV-05` | `build` | Only an internal failure is a server error |
+| `SV-05` | `build` | In the failure table, only an internal failure is a server error |
 | `SV-06` | `build` | A quote, a backslash and the control bytes are escaped at the checked values, and the emitted table matches the rule for all 256 bytes |
 | `SV-07` | `build` | Every file in server is what the certified root writes, and the committed module is not stale |
-| `SV-08` | `build` | The box's build checks the theorems and writes the C with official Lean alone, and stops on a false theorem, a sorry or an edited file |
+| `SV-08` | `build` | The box's build checks the theorems and every file with official Lean alone, and stops on a false, weakened or deleted theorem, a sorry, an added axiom or an edited file |
 
 ## Cited authorities
 

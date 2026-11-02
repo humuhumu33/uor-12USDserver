@@ -8,10 +8,10 @@ What the `core` suite establishes about the server in `server/`, what it doesn't
 | --- | --- | --- |
 | The decision functions in `emit/core.lex`: batch order, routes, holds, the write pause, failures | Proved over every input, in LexLean, by the Lean kernel | 16 theorems, `SV-01` to `SV-05` |
 | Byte classes in `emit/core.lex` | Proved at bytes 0, 31, 32, 34, 92 and 255 only | 6 theorems, `SV-06` |
-| The Rust generator that writes the files | Certified by LexLean's production build against its definitions | `just emit`, `SV-07` |
-| The box's own build | Official Lean alone checks the 22 theorems and writes the same files, or the build stops | `build.sh`, `SV-08` |
-| The tables as they reach C, all 256 byte classes, the 8-byte escape test | Tested exhaustively, not proved | `emit/core_test.c`, `SV-06` |
-| That the server reads those tables | Checked by reading the source, then exercised by the 42 tests | `crates/conformance/tests/core.rs` |
+| The Rust generator that writes the files | Certified by LexLean's production build against its definitions. For `server.c` this is a round trip: the generator carries the text it was given. Only `core.h` is computed | `just emit`, `SV-07` |
+| The box's own build | Official Lean alone checks the theorems, restates them in `Claims.lean`, checks their axioms and compares every file, or the build stops | `build.sh`, `SV-08` |
+| The tables as they reach C, all 256 byte classes, the 8-byte escape test | Tested exhaustively, not proved | `server/src/core_test.c`, `SV-06` |
+| That the server reads those tables, and in the right order | String and order checks on the source, then exercised by the 42 tests. Not proved, and a defect that keeps the strings could pass | `crates/conformance/tests/core.rs` |
 | The event loop, HTTP and JSON parsing, JWT, B-tree reads and SQLite calls | C text carried through the module. Not proved | The challenge's 42 tests; load runs |
 | Capacity, in users held | Measured on CI loopback with an emulated CPU limit. Not a score | `rig/` |
 
@@ -43,10 +43,16 @@ The byte 127 defect shows what each gate is for: the proofs passed, and only the
 
 ## The box's build
 
-The folder a pull request adds holds no C. `build.sh` checks the theorems with official Lean, runs the program, and compiles what it writes. `emit/submission/plant.sh` puts defects into a copy of that folder, and the build must stop on each, after an untouched copy has built.
+The folder a pull request adds holds the readable C and the plain Lean. `build.sh` checks the theorems with official Lean, runs the program, compares every file, and tests the tables. `emit/submission/plant.sh` puts defects into a copy of that folder, and the build must stop on each, after an untouched copy has built.
 
-| Defect | Failing command | Result |
-| --- | --- | --- |
-| `gateNext` changed in `Emit.lean`, so a copied log no longer opens the gate | `PGO=0 bash build.sh` | PLANT_FALSE |
-| A theorem's proof replaced by `sorry` | `PGO=0 bash build.sh` | `declaration uses sorry`, `build failed`, exit 1 |
-| `README.md` edited without the program | `PGO=0 bash build.sh` | `cmp` differs, exit 1 |
+BOX_RESULTS
+
+## Known gaps
+
+Found by an independent audit and not closed:
+
+- Capacity and other measurements aren't in the ledger, because no measured claim is made.
+- The 503 from `/health`, the close when a request outgrows its buffer, and `die()` aren't modelled failures (R5). The challenge's negative tests run outside `just vv`.
+- The order in `AGENTS.md` wasn't followed for this suite: `server.c` predates the model and tests (R3).
+- `build.sh` skips the Lean steps where there is no `lean/`, the path `rig.yml` uses. The submitted folder always has it.
+- Nothing has run on Ubuntu's 6.8. On 6.8 a request can pin later socket closes until it ends, which is untested under connection churn.

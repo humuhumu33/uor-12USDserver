@@ -1,6 +1,7 @@
 #!/bin/bash
-# Runs inside the locked SDK image. Writes the folder a pull request would add: the scripts, the README, and the plain
-# Lean of the module and of the one runtime file it imports. No C: the box writes that from the Lean.
+# Runs inside the locked SDK image. Writes the folder a pull request would add: the readable C and the core's LexLean to
+# review, the plain Lean of the module and of the one runtime file it imports, and the scripts. The box checks that Lean,
+# runs it, and stops if what it writes differs from the C here.
 set -euo pipefail
 repo="$PWD"
 project="$repo/emit/work-export"
@@ -22,7 +23,9 @@ cp "$vendor/LICENSE-MIT" "$out/lean/LexLeanRuntime/LICENSE-MIT"
 cp "$vendor/LICENSE-APACHE" "$out/lean/LexLeanRuntime/LICENSE-APACHE"
 chmod -R u+w "$out"
 
-cp emit/submission/lakefile.toml emit/submission/Write.lean "$out/lean/"
+cp emit/submission/lakefile.toml emit/submission/Write.lean emit/submission/Claims.lean "$out/lean/"
+cp emit/core.lex "$out/core.lex"
+cp -r server/src "$out/src"
 cp emit/project/lean-toolchain "$out/lean/lean-toolchain"
 cp server/build.sh server/install.sh server/start.sh server/.gitignore server/README.md "$out/"
 find "$out" -type f | sed "s#$out/##" | xargs -I{} wc -c "$out/{}" | sed "s#$out/##"

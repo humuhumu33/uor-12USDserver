@@ -1,6 +1,6 @@
 # LexLean + C: a proved core on io_uring and SQLite B-tree reads
 
-This entry is one [LexLean](https://github.com/UOR-Foundation/LexLean) program, compiled to the plain Lean in `lean/`. On the box, official Lean checks its theorems, runs it, and it writes the C that gets compiled. The decisions are written and proved in LexLean. The event loop, parsers and SQLite calls are C, carried as text through that program, because LexLean has no I/O or raw pointers. **The server as a whole is not formally verified.** The table below says what is.
+Every file here is written by one [LexLean](https://github.com/UOR-Foundation/LexLean) program, compiled to the plain Lean in `lean/`. On the box, official Lean checks its theorems, runs it, and stops the build unless what it writes matches these files. Six decisions are written and proved in LexLean (`core.lex`) and reach the server as about 100 lines of C tables. **Everything else is hand-written C in `src/server.c`, carried as text through that program, because LexLean has no I/O or raw pointers: the event loop, parsers, JWT, SQLite calls, and the logic that picks which table to ask and when. The server as a whole is not formally verified.**
 
 | | |
 |---|---|
@@ -15,28 +15,27 @@ This entry is one [LexLean](https://github.com/UOR-Foundation/LexLean) program, 
 
 | Part | Status |
 |---|---|
-| Batch order: a response leaves only after its batch commits, a failure response only after the commit fails | Proved over every phase and event |
-| Routes: only POST writes, every write needs a token, an unknown method is not found | Proved over every method and path shape |
-| Holding writes: reads go on while writes wait, a held connection keeps its order while the hold queue has room | Proved over every input |
+| Batch order: a batch's responses leave only after its commit, and are replaced by failures only when it fails. Per-request errors (400, 401, 404) go out with the batch | Proved over every phase and event |
+| Routes: only POST writes, every write needs a token, an unknown method is not found. Which route becomes which handler is C | Proved over every method and path shape |
+| The hold table: no read is held on a connection with nothing held, every write is held at a closed gate, and every later request on a held connection is held, while the queue has room. That the C then keeps order is not proved | Proved over every input |
 | The write pause: closes at its limit, stays closed until the log is copied or the wait times out | Proved over every input |
-| Errors: only an internal failure is a 5xx | Proved over every failure |
+| The failure table: only an internal failure is a 5xx. The 503 from `/health` and the fallback 500 are hand-written | Proved over every failure |
 | JSON byte classes | Proved at bytes 0, 31, 32, 34, 92 and 255 only |
 | The tables as they reach C, all 256 byte classes, the 8-byte escape test | Tested exhaustively, not proved |
 | The event loop, HTTP and JSON parsing, JWT, B-tree reads, SQLite calls | C. Not proved. Covered by `test/test.sh` and load runs |
 
-The theorems are about the LexLean definitions. Nothing proves that the C uses a table correctly: a test checks that it reads them, and the suite exercises them. `build.sh` checks all 22 theorems with Lean's kernel every time it runs. The registered claims and planted defects are in [the repository](https://github.com/humuhumu33/uor-12USDserver).
-
-If the hold queue is full, a later request on a held connection can overtake a held one. The theorem states this limit. It needs pipelined requests on a connection with a held write.
+The theorems are about the LexLean definitions. Nothing proves that the C uses a table correctly, or asks it at the right time: a repository test reads the source for that, and the 42 tests exercise it. The registered claims and planted defects are in [the repository](https://github.com/humuhumu33/uor-12USDserver).
 
 ## How it is built
 
-`install.sh` installs official Lean 4.32.1, about 2.8 GB on disk, used only by the build. `build.sh` then:
+`install.sh` installs official Lean 4.32.1, pinned by digest, about 2.8 GB on disk and used only by the build. `build.sh` then:
 
-1. runs `lake build --wfail` in `lean/`, so a false theorem or a theorem left as `sorry` stops the build;
-2. runs the program, which writes `generated/src/server.c`, `generated/src/core.h` and a copy of every other file here, and stops if any copy differs;
-3. compiles the generated C with SQLite, downloading and checksumming SQLite.
+1. runs `lake build --wfail` in `lean/`. This checks the 22 theorems in the module, and `Claims.lean`, which restates them directly on the functions and checks each one's axioms. A false, weakened or deleted theorem, a `sorry` or an added axiom stops the build;
+2. runs the program, and stops if any file it writes differs from the file here, `src/server.c` and `src/core.h` included;
+3. tests the tables against rules written out independently in `src/core_test.c`;
+4. compiles `src/` with SQLite, downloading and checksumming SQLite.
 
-`lean/UorEmit/Emit.lean` and `lean/LexLeanRuntime/Portable.lean` are generated by LexLean 0.3.0, which has no standalone release, from the `.lex.tex` source in the repository. `Portable.lean` is LexLean's runtime, MIT or Apache-2.0. Nothing prebuilt is shipped. Everything `Write.lean` reads is the Lean here.
+`src/` and `core.lex` are here to read. `lean/UorEmit/Emit.lean` holds that same C as string literals, so a review should read `src/`, and the build proves the two match. `Emit.lean` and `lean/LexLeanRuntime/Portable.lean` are generated by LexLean 0.3.0, which has no standalone release, from `.lex.tex` source in the repository. **They are compiler output committed here, and I'm stating that plainly for rule 10.** `Portable.lean` is LexLean's runtime, MIT or Apache-2.0. No binary is shipped.
 
 ## Design
 
@@ -52,13 +51,18 @@ One thread runs the event loop, HTTP, JWT, JSON and SQLite reads. A second threa
 - **Page cache.** 32 MB, with `mmap_size=0`.
 - **Code lock.** The binary is locked in RAM, so reclaim at the memory wall can't stall the loop on its own code.
 
+## Known limits
+
+- A pipelined write and read in one batch: reads run first, so the read sees the state before the write. Requests on a connection are otherwise answered in order.
+- If the hold queue is full, a later request on a held connection can overtake a held one.
+
 ## Credit
 
 Built on what earlier entries published, under MIT: the B-tree seek and record decoding follow lean-derive-hargup (#153); drain-first batching, the write gate, the one-write WAL idea and the reserved-field retry for Ubuntu's buffer-ring registration follow c-iouring-pavlyhalim (#245); the multishot receive follows rust-iouring-kensac (#264).
 
 ## Measurements
 
-No user-count score is claimed. The organiser's benchmark is the only score. Everything measured so far ran on CI runners over loopback with an emulated CPU limit, which differs from the box in CPU, kernel and network.
+No user-count score is claimed. The organiser's benchmark is the only score. Everything measured so far ran on CI runners over loopback, on kernel 7.0, which differs from the box in CPU, kernel (Ubuntu's 6.8) and network. It has not run on 6.8.
 
 ## Run
 
