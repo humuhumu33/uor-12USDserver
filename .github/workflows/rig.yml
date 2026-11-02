@@ -72,8 +72,9 @@ jobs:
           # Near the limit, interleaved so drift on this machine hits both servers.
           # 73%: the quota at which the control spends the same share here at 295k as on the box (59% against 81%).
           export CPU_QUOTA=73%
-          for run in "ours 320000" "control 320000" "ours 340000" "ours 360000" "ours 300000"; do
-            read -r server users <<< "$run"
-            echo "=== $server at $users users"
-            bash rig/measure.sh "$server" "$users" 90 150 "$RUNNER_TEMP/challenge" "$PWD/rig"
+          # Profiling slows a server, so only the unprofiled runs compare latency.
+          for run in "ours 300000 0" "control 300000 0" "ours 310000 0" "control 310000 0" "ours 300000 1" "control 300000 1"; do
+            read -r server users profile <<< "$run"
+            echo "=== $server at $users users, profile=$profile"
+            PROFILE=$profile bash rig/measure.sh "$server" "$users" 90 150 "$RUNNER_TEMP/challenge" "$PWD/rig"
           done
