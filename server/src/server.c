@@ -498,8 +498,8 @@ static void check_columns(const char *table, const char *expected) {
 #define WAL_GATE_NANOSECONDS 1000000000LL
 #define WAL_GATE_FRAMES 4000
 #define WAL_INLINE_FRAMES 16384
-// At the CPU limit the loop rarely sleeps, and nice 19 left a pass 240-600 ms with writes waiting; nice 10 took about 100 ms.
-#define CHECKPOINT_NICE 10
+// On one vCPU a higher priority takes the loop's CPU for the whole pass. Nice 10 lost to nice 19 on CPU and tail in two runs.
+#define CHECKPOINT_NICE 19
 static sqlite3 *checkpoint_db;
 static pthread_mutex_t checkpoint_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t checkpoint_cond = PTHREAD_COND_INITIALIZER;
@@ -709,7 +709,8 @@ static void db_open(const char *path) {
     exec("PRAGMA journal_mode = WAL");
     exec("PRAGMA synchronous = NORMAL");
     exec("PRAGMA temp_store = MEMORY");
-    exec("PRAGMA cache_size = -8192");
+    // A page held here needs no WAL-index lookup and no read. 32 MB beat 8 MB on CPU and tail in two runs.
+    exec("PRAGMA cache_size = -32768");
     exec("PRAGMA mmap_size = 0");
     check_columns("users", "id,username,created_at");
     check_columns("posts", "id,user_id,body,created_at");

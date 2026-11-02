@@ -64,19 +64,21 @@ jobs:
         timeout-minutes: 15
         shell: bash
         run: |
-          # Each differs from the server in one setting, so what a run measures is that setting.
+          # Each differs from the server in the settings named, so what a run measures is those settings.
           build_variant() {
-            local name="$1" from="$2" to="$3"
+            local name="$1"
+            shift
             mkdir -p /tmp/variants
             cp -r server "/tmp/variants/$name"
-            grep -q "$from" "/tmp/variants/$name/src/server.c" || { echo "no $from"; exit 1; }
-            sed -i "s/$from/$to/" "/tmp/variants/$name/src/server.c"
+            while [ "$#" -gt 0 ]; do
+              grep -q "$1" "/tmp/variants/$name/src/server.c" || { echo "no $1"; exit 1; }
+              sed -i "s/$1/$2/" "/tmp/variants/$name/src/server.c"
+              shift 2
+            done
             bash "/tmp/variants/$name/build.sh" 2>&1 | tail -1
           }
-          build_variant v-nice19 "define CHECKPOINT_NICE 10" "define CHECKPOINT_NICE 19"
-          build_variant v-wait "define WAIT_COMPLETIONS 64" "define WAIT_COMPLETIONS 256"
-          build_variant v-hold250 "define WAL_GATE_NANOSECONDS 1000000000LL" "define WAL_GATE_NANOSECONDS 250000000LL"
-          build_variant v-cache32 "cache_size = -8192" "cache_size = -32768"
+          build_variant v-earlier "define CHECKPOINT_NICE 19" "define CHECKPOINT_NICE 10" "cache_size = -32768" "cache_size = -8192"
+          build_variant v-cache64 "cache_size = -32768" "cache_size = -65536"
       - name: Build the control
         shell: bash
         run: |
@@ -95,7 +97,7 @@ jobs:
           # A load near this CPU's limit, or nothing separates the settings: runners differ.
           users=310000
           grep -q 'EPYC 7763' /proc/cpuinfo || users=360000
-          for server in ours v-nice19 v-wait v-hold250 v-cache32 control ours v-nice19 v-wait v-hold250 v-cache32 control; do
+          for server in ours v-earlier v-cache64 control ours v-earlier v-cache64 control ours v-earlier v-cache64 control; do
             echo "=== $server at $users users"
             bash rig/measure.sh "$server" "$users" 90 150 "$RUNNER_TEMP/challenge" "$PWD/rig"
           done
