@@ -19,3 +19,5 @@
 node_modules/
 test-results/
 playwright-report/
+emit/work*/
+emit/out/
