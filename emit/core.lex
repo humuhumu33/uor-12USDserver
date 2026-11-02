@@ -121,14 +121,14 @@ definition{
 }
 
 definition{
-  name: committingFollowsCommit,
-  parameters: [phase : Phase, event : Event],
+  name: checkCommitting,
+  parameters: [phase : Phase, next : Phase, action : Action],
   result: Bool,
-  body: (match (nextPhase phase event)
+  body: (match next
     | Phase.committing => (match phase
       | Phase.committing => true
       | Phase.idle => false
-      | Phase.reading => (match (actionOf phase event)
+      | Phase.reading => (match action
         | Action.commit => true
         | Action.nothing => false
         | Action.begin => false
@@ -136,6 +136,14 @@ definition{
         | Action.failAll => false))
     | Phase.idle => true
     | Phase.reading => true),
+  executable: true
+}
+
+definition{
+  name: committingFollowsCommit,
+  parameters: [phase : Phase, event : Event],
+  result: Bool,
+  body: (checkCommitting phase (nextPhase phase event) (actionOf phase event)),
   executable: true
 }
 
@@ -157,7 +165,7 @@ theorem{
   name: committing_follows_commit,
   parameters: [phase : Phase, event : Event],
   statement: ((committingFollowsCommit phase event) = true),
-  proof: EXHAUST(phase:idle,reading,committing;event:request,batchEnd,commitOk,commitFail;nextPhase,actionOf,committingFollowsCommit)
+  proof: EXHAUST(phase:idle,reading,committing;event:request,batchEnd,commitOk,commitFail;actionOf,checkCommitting,committingFollowsCommit,nextPhase)
 }
 
 inductive{
@@ -251,13 +259,30 @@ definition{
 }
 
 definition{
+  name: checkWriteMethod,
+  parameters: [method : Method, route : Route],
+  result: Bool,
+  body: (match route
+    | Route.create => (match method
+      | Method.post => true
+      | Method.get => false
+      | Method.other => false)
+    | Route.like => (match method
+      | Method.post => true
+      | Method.get => false
+      | Method.other => false)
+    | Route.notFound => true
+    | Route.feed => true
+    | Route.health => true
+    | Route.post => true),
+  executable: true
+}
+
+definition{
   name: writeComesFromPost,
   parameters: [method : Method, shape : Shape],
   result: Bool,
-  body: (if (isWrite (routeOf method shape)) then (match method
-    | Method.post => true
-    | Method.get => false
-    | Method.other => false) else true),
+  body: (checkWriteMethod method (routeOf method shape)),
   executable: true
 }
 
@@ -272,7 +297,7 @@ theorem{
   name: only_post_writes,
   parameters: [method : Method, shape : Shape],
   statement: ((writeComesFromPost method shape) = true),
-  proof: EXHAUST(method:get,post,other;shape:feed,health,posts,postId,postLike,unknown;routeOf,isWrite,writeComesFromPost)
+  proof: EXHAUST(method:get,post,other;shape:feed,health,posts,postId,postLike,unknown;checkWriteMethod,routeOf,writeComesFromPost)
 }
 
 theorem{
