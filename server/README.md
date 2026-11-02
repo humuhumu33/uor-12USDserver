@@ -62,7 +62,21 @@ Built on what earlier entries published, under MIT: the B-tree seek and record d
 
 ## Measurements
 
-No user-count score is claimed. The organiser's benchmark is the only score. Everything measured so far ran on CI runners over loopback, on kernel 7.0, which differs from the box in CPU, kernel (Ubuntu's 6.8) and network. It has not run on 6.8.
+No user-count score is claimed. The organiser's benchmark is the only score.
+
+Measured in a guest shaped like the box: 1 vCPU, 1,967 MB, no swap, Ubuntu 24.04 on kernel 6.8.0-147, installed and built inside the guest, on GitHub's runners, with a replay of the `bench/load.js` user model on the host across a virtio network device. That method follows #278. The build there took 69-116 s and 1.44 GB at its peak. The holds were 2 minutes with a 60 s ramp, one run per load, so the differences between them are mostly noise.
+
+| Host CPU | Users | p95 | p99 | Errors | Outcome |
+|---|---:|---:|---:|---:|---|
+| EPYC 9V45 | 280,000 | 4.4 ms | 5.8 ms | 0 | held |
+| EPYC 9V45 | 300,000 | 4.5 ms | 6.2 ms | 0 | held |
+| EPYC 9V45 | 310,000 | 4.7 ms | 5.9 ms | 0 | held |
+| EPYC 9V45 | 320,000 | 6.6 ms | 194 ms | 0 | held |
+| EPYC 9V74 | 250,000 | 11 ms | 85 ms | 0 | held |
+| EPYC 9V74 | 300,000 | 66 ms | 363 ms | 0 | held |
+| EPYC 9V74 | 320,000 | | | | **killed by out-of-memory** |
+
+The second table's host is the closer guide to the box, and the kill is the honest result at that load there: past what the CPU can serve, requests pile up in sockets until memory runs out. These runs say little about the box's limit, since the host's CPU moves it a lot: c-iouring-pavlyhalim also held 320,000 on the first host and collapsed there on the second, where it had already been damaged by the kill.
 
 ## Run
 

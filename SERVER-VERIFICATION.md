@@ -13,7 +13,7 @@ What the `core` suite establishes about the server in `server/`, what it doesn't
 | The tables as they reach C, all 256 byte classes, the 8-byte escape test | Tested exhaustively, not proved | `server/src/core_test.c`, `SV-06` |
 | That the server reads those tables, and in the right order | String and order checks on the source, then exercised by the 42 tests. Not proved, and a defect that keeps the strings could pass | `crates/conformance/tests/core.rs` |
 | The event loop, HTTP and JSON parsing, JWT, B-tree reads and SQLite calls | C text carried through the module. Not proved | The challenge's 42 tests; load runs |
-| Capacity, in users held | Measured on CI loopback with an emulated CPU limit. Not a score | `rig/` |
+| Capacity, in users held | Measured in a 1 vCPU, 2 GB guest on kernel 6.8, and earlier on CI loopback. Not a score | `rig/kvm/`, `rig/` |
 
 No theorem says anything about the C that calls a table. The server as a whole is not formally verified.
 
@@ -67,4 +67,5 @@ Found by an independent audit and not closed:
 - The 503 from `/health`, the close when a request outgrows its buffer, and `die()` aren't modelled failures (R5). The challenge's negative tests run outside `just vv`.
 - The order in `AGENTS.md` wasn't followed for this suite: `server.c` predates the model and tests (R3).
 - `build.sh` skips the Lean steps where there is no `lean/`, the path `rig.yml` uses. The submitted folder always has it.
-- Nothing has run on Ubuntu's 6.8. On 6.8 a request can pin later socket closes until it ends, which is untested under connection churn.
+- It has run on Ubuntu's 6.8 only in a guest on GitHub's runners, not on the benchmark's droplet. On 6.8 a request can pin later socket closes until it ends, which is untested under connection churn.
+- In that guest, on one host, the server was killed by out-of-memory at 320,000 users: past what the CPU can serve, requests pile up in sockets at about 130 MB a second. It wasn't reproduced on a faster host, and one loop stall of 1.4 s seen under an emulated quota on a slower one has no explanation.
