@@ -282,83 +282,105 @@ theorem{
   proof: simplify{definitions: [routeOf]}
 }
 
+inductive{
+  name: Flag,
+  type_parameters: [],
+  parameters: [],
+  constructors: [
+    {name: yes, fields: []},
+    {name: no, fields: []}
+  ]
+}
+
 definition{
   name: shouldHold,
-  parameters: [room : Bool, gateClosed : Bool, write : Bool, connectionHeld : Bool],
-  result: Bool,
-  body: (if room then (if connectionHeld then true else (if gateClosed then write else false)) else false),
+  parameters: [room : Flag, gateClosed : Flag, write : Flag, connectionHeld : Flag],
+  result: Flag,
+  body: (match room
+    | Flag.no => (ctor Flag.no)
+    | Flag.yes => (match connectionHeld
+      | Flag.yes => (ctor Flag.yes)
+      | Flag.no => (match gateClosed
+        | Flag.yes => write
+        | Flag.no => (ctor Flag.no)))),
   executable: true
 }
 
 theorem{
   name: reads_go_on_while_writes_wait,
-  parameters: [room : Bool, gateClosed : Bool],
-  statement: ((shouldHold room gateClosed false false) = false),
-  proof: EXHAUST(room:true,false;gateClosed:true,false;shouldHold)
+  parameters: [room : Flag, gateClosed : Flag],
+  statement: ((shouldHold room gateClosed (ctor Flag.no) (ctor Flag.no)) = (ctor Flag.no)),
+  proof: EXHAUST(room:yes,no;gateClosed:yes,no;shouldHold)
 }
 
 theorem{
   name: a_held_connection_keeps_its_order,
-  parameters: [gateClosed : Bool, write : Bool],
-  statement: ((shouldHold true gateClosed write true) = true),
-  proof: EXHAUST(gateClosed:true,false;write:true,false;shouldHold)
+  parameters: [gateClosed : Flag, write : Flag],
+  statement: ((shouldHold (ctor Flag.yes) gateClosed write (ctor Flag.yes)) = (ctor Flag.yes)),
+  proof: EXHAUST(gateClosed:yes,no;write:yes,no;shouldHold)
 }
 
 theorem{
   name: a_closed_gate_holds_writes,
-  parameters: [connectionHeld : Bool],
-  statement: ((shouldHold true true true connectionHeld) = true),
-  proof: EXHAUST(connectionHeld:true,false;;shouldHold)
+  parameters: [connectionHeld : Flag],
+  statement: ((shouldHold (ctor Flag.yes) (ctor Flag.yes) (ctor Flag.yes) connectionHeld) = (ctor Flag.yes)),
+  proof: EXHAUST(connectionHeld:yes,no;;shouldHold)
 }
 
 theorem{
   name: an_open_gate_holds_nothing_new,
-  parameters: [room : Bool, write : Bool],
-  statement: ((shouldHold room false write false) = false),
-  proof: EXHAUST(room:true,false;write:true,false;shouldHold)
+  parameters: [room : Flag, write : Flag],
+  statement: ((shouldHold room (ctor Flag.no) write (ctor Flag.no)) = (ctor Flag.no)),
+  proof: EXHAUST(room:yes,no;write:yes,no;shouldHold)
 }
 
 theorem{
   name: a_full_hold_queue_holds_nothing,
-  parameters: [gateClosed : Bool, write : Bool],
-  statement: ((shouldHold false gateClosed write true) = false),
-  proof: EXHAUST(gateClosed:true,false;write:true,false;shouldHold)
+  parameters: [gateClosed : Flag, write : Flag, connectionHeld : Flag],
+  statement: ((shouldHold (ctor Flag.no) gateClosed write connectionHeld) = (ctor Flag.no)),
+  proof: EXHAUST(gateClosed:yes,no;write:yes,no;connectionHeld:yes,no;shouldHold)
 }
 
 definition{
   name: gateNext,
-  parameters: [closed : Bool, overLimit : Bool, copied : Bool, timedOut : Bool],
-  result: Bool,
-  body: (if closed then (if copied then false else (if timedOut then false else true)) else overLimit),
+  parameters: [closed : Flag, overLimit : Flag, copied : Flag, timedOut : Flag],
+  result: Flag,
+  body: (match closed
+    | Flag.no => overLimit
+    | Flag.yes => (match copied
+      | Flag.yes => (ctor Flag.no)
+      | Flag.no => (match timedOut
+        | Flag.yes => (ctor Flag.no)
+        | Flag.no => (ctor Flag.yes)))),
   executable: true
 }
 
 theorem{
   name: the_gate_stays_closed_until_the_log_is_copied,
-  parameters: [overLimit : Bool],
-  statement: ((gateNext true overLimit false false) = true),
-  proof: EXHAUST(overLimit:true,false;;gateNext)
+  parameters: [overLimit : Flag],
+  statement: ((gateNext (ctor Flag.yes) overLimit (ctor Flag.no) (ctor Flag.no)) = (ctor Flag.yes)),
+  proof: EXHAUST(overLimit:yes,no;;gateNext)
 }
 
 theorem{
   name: the_gate_closes_at_the_limit,
-  parameters: [copied : Bool, timedOut : Bool],
-  statement: ((gateNext false true copied timedOut) = true),
-  proof: EXHAUST(copied:true,false;timedOut:true,false;gateNext)
+  parameters: [copied : Flag, timedOut : Flag],
+  statement: ((gateNext (ctor Flag.no) (ctor Flag.yes) copied timedOut) = (ctor Flag.yes)),
+  proof: EXHAUST(copied:yes,no;timedOut:yes,no;gateNext)
 }
 
 theorem{
   name: the_gate_opens_when_the_log_is_copied,
-  parameters: [overLimit : Bool, timedOut : Bool],
-  statement: ((gateNext true overLimit true timedOut) = false),
-  proof: EXHAUST(overLimit:true,false;timedOut:true,false;gateNext)
+  parameters: [overLimit : Flag, timedOut : Flag],
+  statement: ((gateNext (ctor Flag.yes) overLimit (ctor Flag.yes) timedOut) = (ctor Flag.no)),
+  proof: EXHAUST(overLimit:yes,no;timedOut:yes,no;gateNext)
 }
 
 theorem{
   name: a_timeout_always_opens_the_gate,
-  parameters: [overLimit : Bool, copied : Bool],
-  statement: ((gateNext true overLimit copied true) = false),
-  proof: EXHAUST(overLimit:true,false;copied:true,false;gateNext)
+  parameters: [overLimit : Flag, copied : Flag],
+  statement: ((gateNext (ctor Flag.yes) overLimit copied (ctor Flag.yes)) = (ctor Flag.no)),
+  proof: EXHAUST(overLimit:yes,no;copied:yes,no;gateNext)
 }
 
 inductive{
@@ -716,21 +738,31 @@ definition{
 }
 
 definition{
+  name: flagText,
+  parameters: [flag : Flag],
+  result: Bytes,
+  body: (match flag
+    | Flag.yes => T"1"
+    | Flag.no => T"0"),
+  executable: true
+}
+
+definition{
   name: holdRow,
-  parameters: [room : Bool, gateClosed : Bool],
+  parameters: [room : Flag, gateClosed : Flag],
   result: Bytes,
   body: (cat3 T"    "
-    (prim append (row2 (boolText (shouldHold room gateClosed false false)) (boolText (shouldHold room gateClosed false true))) (row2 (boolText (shouldHold room gateClosed true false)) (boolText (shouldHold room gateClosed true true))) : Bytes)
+    (prim append (row2 (flagText (shouldHold room gateClosed (ctor Flag.no) (ctor Flag.no))) (flagText (shouldHold room gateClosed (ctor Flag.no) (ctor Flag.yes)))) (row2 (flagText (shouldHold room gateClosed (ctor Flag.yes) (ctor Flag.no))) (flagText (shouldHold room gateClosed (ctor Flag.yes) (ctor Flag.yes)))) : Bytes)
     T"\n"),
   executable: true
 }
 
 definition{
   name: gateRow,
-  parameters: [closed : Bool, overLimit : Bool],
+  parameters: [closed : Flag, overLimit : Flag],
   result: Bytes,
   body: (cat3 T"    "
-    (prim append (row2 (boolText (gateNext closed overLimit false false)) (boolText (gateNext closed overLimit false true))) (row2 (boolText (gateNext closed overLimit true false)) (boolText (gateNext closed overLimit true true))) : Bytes)
+    (prim append (row2 (flagText (gateNext closed overLimit (ctor Flag.no) (ctor Flag.no))) (flagText (gateNext closed overLimit (ctor Flag.no) (ctor Flag.yes)))) (row2 (flagText (gateNext closed overLimit (ctor Flag.yes) (ctor Flag.no))) (flagText (gateNext closed overLimit (ctor Flag.yes) (ctor Flag.yes)))) : Bytes)
     T"\n"),
   executable: true
 }
@@ -741,8 +773,8 @@ definition{
   result: Bytes,
   body: (cat4
     T"// Indexed by room, closed gate, write, held connection, most significant first.\nstatic const uint8_t SHOULD_HOLD[16] = {\n"
-    (cat4 (cat4 (holdRow false false) (holdRow false true) (holdRow true false) (holdRow true true)) T"};\n" T"// Indexed by closed, over the limit, copied, timed out, most significant first.\n" T"static const uint8_t GATE_NEXT[16] = {\n")
-    (cat4 (gateRow false false) (gateRow false true) (gateRow true false) (gateRow true true))
+    (cat4 (cat4 (holdRow (ctor Flag.no) (ctor Flag.no)) (holdRow (ctor Flag.no) (ctor Flag.yes)) (holdRow (ctor Flag.yes) (ctor Flag.no)) (holdRow (ctor Flag.yes) (ctor Flag.yes))) T"};\n" T"// Indexed by closed, over the limit, copied, timed out, most significant first.\n" T"static const uint8_t GATE_NEXT[16] = {\n")
+    (cat4 (gateRow (ctor Flag.no) (ctor Flag.no)) (gateRow (ctor Flag.no) (ctor Flag.yes)) (gateRow (ctor Flag.yes) (ctor Flag.no)) (gateRow (ctor Flag.yes) (ctor Flag.yes)))
     T"};\n"),
   executable: true
 }
