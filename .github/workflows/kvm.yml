@@ -2,7 +2,7 @@ name: kvm
 on:
   push:
     branches: ['server/users-held']
-    paths: ['rig/kvm/**', 'rig/loadgen.c', 'server/src/server.c', '.github/workflows/kvm.yml']
+    paths: ['rig/kvm/**', 'rig/loadgen.c', 'emit/project/**', '.github/workflows/kvm.yml']
   workflow_dispatch:
 permissions:
   contents: read
