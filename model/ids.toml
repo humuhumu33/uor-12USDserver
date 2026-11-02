@@ -68,3 +68,9 @@ id = "SV-07"
 level = "build"
 suite = "core"
 statement = "Every file in server is what the certified root writes, and the committed module is not stale"
+
+[[id]]
+id = "SV-08"
+level = "build"
+suite = "core"
+statement = "The box's build checks the theorems and writes the C with official Lean alone, and stops on a false theorem, a sorry or an edited file"

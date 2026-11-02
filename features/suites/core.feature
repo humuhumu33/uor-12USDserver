@@ -52,3 +52,10 @@ Feature: core
     When just vv runs emit/sdk-emit.sh
     Then regenerating the module gives the committed bytes
     And the root writes every file in server byte for byte
+
+  @SV-08 @build
+  Scenario: The box's build checks the theorems and writes the C with official Lean alone, and stops on a false theorem, a sorry or an edited file
+    Given the folder emit/submission/sdk-export.sh writes
+    When build.sh runs with official Lean and nothing from the SDK
+    Then lake build rejects a false theorem and, with warnings as failures, a sorry
+    And a file here that differs from what the program writes stops the build

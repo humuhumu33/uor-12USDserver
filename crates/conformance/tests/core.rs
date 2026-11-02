@@ -296,3 +296,44 @@ fn core_sv_07() {
         "the committed module must hold the production root"
     );
 }
+
+/// `SV-08`: The box's build checks the theorems and writes the C with official Lean alone, and stops on a false theorem, a sorry or an edited file.
+#[test]
+fn core_sv_08() {
+    let build = read("server/build.sh");
+    assert!(
+        build.contains("lake build --wfail"),
+        "warnings must fail the build, or a sorry passes"
+    );
+    assert!(
+        build.contains("lean --run Write.lean ../generated"),
+        "the program must write the files on the box"
+    );
+    assert!(
+        build.contains("cmp \"$name\" \"generated/$name\""),
+        "a file that differs from what the program writes must stop the build"
+    );
+    assert!(
+        build.contains("SOURCE=generated/src"),
+        "the C compiled on the box must be what the program wrote"
+    );
+    let install = read("server/install.sh");
+    assert!(
+        install.contains("LEAN_SHA256=") && install.contains("sha256sum -c -"),
+        "the Lean the box installs must be pinned by digest"
+    );
+    let export = read("emit/submission/sdk-export.sh");
+    assert!(
+        !export.contains("server/src"),
+        "the submitted folder must hold no C"
+    );
+    let plant = read("emit/submission/plant.sh");
+    for defect in [
+        "false_theorem",
+        "theorem_left_as_sorry",
+        "readme_edited_alone",
+        "UNTOUCHED",
+    ] {
+        assert!(plant.contains(defect), "plant.sh must try {defect}");
+    }
+}

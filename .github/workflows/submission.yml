@@ -1,0 +1,70 @@
+name: submission
+on:
+  push:
+    branches: ['server/users-held']
+    paths: ['emit/**', 'server/**', '.github/workflows/submission.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  CHALLENGE_COMMIT: c7764b60
+  ENTRY: lexlean-iouring-humuhumu33
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Write the folder a pull request would add
+        shell: bash
+        run: |
+          image=$(sed -n 's/.*"sdk_image":"\([^"]*\)".*/\1/p' prismpm.lock)
+          chmod -R a+rwX emit server
+          docker run --rm --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,exec,nosuid,size=4g \
+            --volume "$PWD:$PWD" --workdir "$PWD" --env HOME=/tmp/home "$image" \
+            bash -c 'mkdir -p "$HOME"; bash emit/submission/sdk-export.sh' 2>&1 | cut -c1-300
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: submission
+          path: emit/out/submission
+          include-hidden-files: true
+  check:
+    needs: export
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: submission
+          path: submission-folder
+      - name: Install from the folder, as the box would
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          ls -la submission-folder submission-folder/lean
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq sqlite3 jq > /dev/null
+          sudo bash submission-folder/install.sh
+          du -sh /opt/lean-4.32.1
+      - name: The challenge's own test run, on the folder
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          git clone -q https://github.com/arjaythedev/twelve-dollar-server-challenge.git "$RUNNER_TEMP/challenge"
+          cd "$RUNNER_TEMP/challenge"
+          git checkout -q "$CHALLENGE_COMMIT"
+          bash seed/make-seed.sh > /dev/null 2>&1
+          mkdir -p "submissions/$ENTRY"
+          cp -r "$GITHUB_WORKSPACE/submission-folder/." "submissions/$ENTRY/"
+          bash test/run.sh "submissions/$ENTRY" 2>&1 | tail -15 | cut -c1-200
+      - name: Plant defects in the folder
+        timeout-minutes: 15
+        shell: bash
+        run: bash emit/submission/plant.sh submission-folder

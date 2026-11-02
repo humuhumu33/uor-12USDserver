@@ -9,6 +9,7 @@ What the `core` suite establishes about the server in `server/`, what it doesn't
 | The decision functions in `emit/core.lex`: batch order, routes, holds, the write pause, failures | Proved over every input, in LexLean, by the Lean kernel | 16 theorems, `SV-01` to `SV-05` |
 | Byte classes in `emit/core.lex` | Proved at bytes 0, 31, 32, 34, 92 and 255 only | 6 theorems, `SV-06` |
 | The Rust generator that writes the files | Certified by LexLean's production build against its definitions | `just emit`, `SV-07` |
+| The box's own build | Official Lean alone checks the 22 theorems and writes the same files, or the build stops | `build.sh`, `SV-08` |
 | The tables as they reach C, all 256 byte classes, the 8-byte escape test | Tested exhaustively, not proved | `emit/core_test.c`, `SV-06` |
 | That the server reads those tables | Checked by reading the source, then exercised by the 42 tests | `crates/conformance/tests/core.rs` |
 | The event loop, HTTP and JSON parsing, JWT, B-tree reads and SQLite calls | C text carried through the module. Not proved | The challenge's 42 tests; load runs |
@@ -39,3 +40,13 @@ Each defect goes into a fresh copy of the repository through `emit/plant.sh`, wh
 Recorded from `plant` run 41442171462, commit `c4340a9`: `PLANTED escaped=0`. Restored: `bootstrap` run 41439383771, commit `61da6e9`, `vv: the acceptance gate passed` on both native runners.
 
 The byte 127 defect shows what each gate is for: the proofs passed, and only the exhaustive test caught it.
+
+## The box's build
+
+The folder a pull request adds holds no C. `build.sh` checks the theorems with official Lean, runs the program, and compiles what it writes. `emit/submission/plant.sh` puts defects into a copy of that folder, and the build must stop on each, after an untouched copy has built.
+
+| Defect | Failing command | Result |
+| --- | --- | --- |
+| `gateNext` changed in `Emit.lean`, so a theorem is false | `PGO=0 bash build.sh` | PLANT_FALSE |
+| A theorem's proof replaced by `sorry` | `PGO=0 bash build.sh` | PLANT_SORRY |
+| `README.md` edited without the program | `PGO=0 bash build.sh` | PLANT_README |

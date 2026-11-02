@@ -35,6 +35,7 @@ model does not sanction.
 | `SV-05` | `build` | Only an internal failure is a server error |
 | `SV-06` | `build` | A quote, a backslash and the control bytes are escaped at the checked values, and the emitted table matches the rule for all 256 bytes |
 | `SV-07` | `build` | Every file in server is what the certified root writes, and the committed module is not stale |
+| `SV-08` | `build` | The box's build checks the theorems and writes the C with official Lean alone, and stops on a false theorem, a sorry or an edited file |
 
 ## Cited authorities
 
