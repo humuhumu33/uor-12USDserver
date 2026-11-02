@@ -495,8 +495,9 @@ static void check_columns(const char *table, const char *expected) {
  * as dirty memory until the box runs out. Past WAL_GATE_FRAMES writes wait, reads go on, and the log restarts. */
 #define CHECKPOINT_FRAMES 1000
 #define WAL_GATE_NANOSECONDS 1000000000LL
+// At the CPU limit the loop rarely sleeps, and nice 19 left a pass 400-900 ms with writes waiting; nice 10 took about 100 ms.
 // Experiments set these through TRY_GATE_FRAMES and TRY_NICE. Remove before submission.
-static int wal_gate_frames = 4000, wal_inline_frames = 16384, checkpoint_nice = 19;
+static int wal_gate_frames = 4000, wal_inline_frames = 16384, checkpoint_nice = 10;
 static sqlite3 *checkpoint_db;
 static pthread_mutex_t checkpoint_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t checkpoint_cond = PTHREAD_COND_INITIALIZER;
@@ -575,9 +576,134 @@ static int wal_gate_opens(void) {
     return 1;
 }
 
+/* SQLite writes each WAL frame as two calls, the 24-byte header and then the page. This keeps the frames of a
+ * commit in a buffer and writes them with one pwrite when the page of the commit frame arrives, before SQLite
+ * updates the wal-index and before COMMIT returns. Readers find frames only through the wal-index, so none can
+ * see a buffered frame. Idea from #245; here unix-excl's own methods are kept and only those a buffered frame
+ * can affect are replaced. */
+#define WAL_BUFFER_SIZE 0x1ffff // unix-excl passes at most 17 bits of a write's length
+#define WAL_FRAME_HEADER 24
+typedef struct {
+    unsigned char *data;
+    int len, commit_next;
+    sqlite3_int64 start, end;
+} WalBuffer;
+static sqlite3_vfs *plain_vfs;
+static sqlite3_vfs one_write_vfs;
+static sqlite3_io_methods wal_methods;
+static const sqlite3_io_methods *plain_methods;
+
+static inline size_t wal_buffer_at(void) {
+    return ((size_t)plain_vfs->szOsFile + 7) & ~(size_t)7;
+}
+
+static inline WalBuffer *wal_buffer(sqlite3_file *f) {
+    return (WalBuffer *)((char *)f + wal_buffer_at());
+}
+
+static int wal_flush(sqlite3_file *f) {
+    WalBuffer *b = wal_buffer(f);
+    if (!b->len) return SQLITE_OK;
+    int n = b->len;
+    b->len = 0;
+    return plain_methods->xWrite(f, b->data, n, b->start);
+}
+
+static int wal_write(sqlite3_file *f, const void *data, int n, sqlite3_int64 at) {
+    WalBuffer *b = wal_buffer(f);
+    int follows = at == b->end;
+    b->end = at + n;
+    if (!b->data) b->data = malloc(WAL_BUFFER_SIZE);
+    int rc;
+    if (!follows || !b->data || n > WAL_BUFFER_SIZE) {
+        // The WAL header after a restart, or a frame rewritten in place.
+        b->commit_next = 0;
+        if ((rc = wal_flush(f))) return rc;
+        return plain_methods->xWrite(f, data, n, at);
+    }
+    if (b->len + n > WAL_BUFFER_SIZE && (rc = wal_flush(f))) return rc;
+    if (!b->len) b->start = at;
+    memcpy(b->data + b->len, data, (size_t)n);
+    b->len += n;
+    if (n == WAL_FRAME_HEADER) {
+        // Bytes 4-7 of a frame header hold the database size on a commit frame and zero on any other.
+        const unsigned char *h = data;
+        b->commit_next = (h[4] | h[5] | h[6] | h[7]) != 0;
+        return SQLITE_OK;
+    }
+    if (b->commit_next) {
+        b->commit_next = 0;
+        return wal_flush(f);
+    }
+    return SQLITE_OK;
+}
+
+static int wal_read(sqlite3_file *f, void *data, int n, sqlite3_int64 at) {
+    int rc = wal_flush(f);
+    return rc ? rc : plain_methods->xRead(f, data, n, at);
+}
+
+static int wal_truncate(sqlite3_file *f, sqlite3_int64 size) {
+    int rc = wal_flush(f);
+    return rc ? rc : plain_methods->xTruncate(f, size);
+}
+
+static int wal_sync(sqlite3_file *f, int flags) {
+    int rc = wal_flush(f);
+    return rc ? rc : plain_methods->xSync(f, flags);
+}
+
+static int wal_file_size(sqlite3_file *f, sqlite3_int64 *size) {
+    int rc = wal_flush(f);
+    return rc ? rc : plain_methods->xFileSize(f, size);
+}
+
+static int wal_close(sqlite3_file *f) {
+    int rc = wal_flush(f);
+    free(wal_buffer(f)->data);
+    int closed = plain_methods->xClose(f);
+    return rc ? rc : closed;
+}
+
+static int one_write_open(sqlite3_vfs *vfs, sqlite3_filename name, sqlite3_file *f, int flags, int *out_flags) {
+    (void)vfs;
+    // unix-excl recognises itself by the name of the VFS it is given.
+    int rc = plain_vfs->xOpen(plain_vfs, name, f, flags, out_flags);
+    if (rc != SQLITE_OK || !(flags & SQLITE_OPEN_WAL)) return rc;
+    if (!plain_methods) {
+        // The main connection's first read gets here, before the checkpoint thread exists.
+        plain_methods = f->pMethods;
+        wal_methods = *plain_methods;
+        wal_methods.xClose = wal_close;
+        wal_methods.xRead = wal_read;
+        wal_methods.xWrite = wal_write;
+        wal_methods.xTruncate = wal_truncate;
+        wal_methods.xSync = wal_sync;
+        wal_methods.xFileSize = wal_file_size;
+    }
+    WalBuffer *b = wal_buffer(f);
+    memset(b, 0, sizeof *b);
+    b->end = -1;
+    f->pMethods = &wal_methods;
+    return rc;
+}
+
+static void one_write_install(void) {
+    plain_vfs = sqlite3_vfs_find("unix-excl");
+    if (!plain_vfs) die("the unix-excl VFS");
+    one_write_vfs = *plain_vfs;
+    one_write_vfs.pNext = NULL;
+    one_write_vfs.szOsFile = (int)(wal_buffer_at() + sizeof(WalBuffer));
+    one_write_vfs.zName = "one-write";
+    one_write_vfs.xOpen = one_write_open;
+    sqlite3_vfs_register(&one_write_vfs, 0);
+}
+
 static void db_open(const char *path) {
     // Only this process opens the file, so no fcntl lock is taken per transaction.
-    if (sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, "unix-excl") != SQLITE_OK) die("open the database");
+    one_write_install();
+    const char *vfs = getenv("TRY_PLAIN") ? "unix-excl" : "one-write";
+    if (sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, vfs) != SQLITE_OK) die("open the database");
     exec("PRAGMA journal_mode = WAL");
     exec("PRAGMA synchronous = NORMAL");
     exec("PRAGMA temp_store = MEMORY");
@@ -607,7 +733,7 @@ static void db_open(const char *path) {
     cur_users = malloc(size);
     cur_time = malloc(size);
     cur_likes = malloc(size);
-    if (sqlite3_open_v2(path, &checkpoint_db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, "unix-excl") != SQLITE_OK) die("open the checkpoint connection");
+    if (sqlite3_open_v2(path, &checkpoint_db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, vfs) != SQLITE_OK) die("open the checkpoint connection");
     sqlite3_exec(checkpoint_db, "PRAGMA synchronous = NORMAL", 0, 0, 0);
     pthread_t thread;
     if (pthread_create(&thread, 0, checkpoint_main, 0)) die("checkpoint thread");
@@ -2010,11 +2136,16 @@ int main(void) {
     struct __kernel_timespec timeout = {.tv_sec = 0, .tv_nsec = WAIT_NANOSECONDS};
     uint64_t next_stats = 0;
     stats_on = getenv("SERVER_STATS") != NULL;
+    int toggle_wake = !getenv("TRY_PLAIN");
     memset(requests, 0, sizeof requests);
     for (;;) {
         struct io_uring_cqe *cqe;
         // A backlog is work already in hand, so there is nothing to wait for.
-        io_uring_submit_and_wait_timeout(&rings[0].ring, &cqe, request_count > request_head ? 0 : WAIT_COMPLETIONS, &timeout, NULL);
+        int wait = request_count > request_head ? 0 : WAIT_COMPLETIONS;
+        // The other rings only need to signal the wake-up while the loop is asleep on this one.
+        if (wait && toggle_wake) for (int index = 1; index < ring_count; index++) io_uring_cq_eventfd_toggle(&rings[index].ring, true);
+        io_uring_submit_and_wait_timeout(&rings[0].ring, &cqe, wait, &timeout, NULL);
+        if (wait && toggle_wake) for (int index = 1; index < ring_count; index++) io_uring_cq_eventfd_toggle(&rings[index].ring, false);
         rings[0].pending_sqes = 0;
         now_seconds = (uint64_t)time(0);
         if (UNLIKELY(stats_on && now_seconds >= next_stats)) {

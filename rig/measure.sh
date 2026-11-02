@@ -34,8 +34,7 @@ sudo ss -Hltnp "sport = :$port" | cut -c1-200
 # CPU_QUOTA emulates a slower CPU, so a server can reach its limit here before it reaches the memory limit.
 quota=()
 [ -n "${CPU_QUOTA:-}" ] && quota=(-p "CPUQuota=$CPU_QUOTA" -p CPUQuotaPeriodSec=5ms)
-[ -n "${TRY_GATE_FRAMES:-}" ] && quota+=(--setenv="TRY_GATE_FRAMES=$TRY_GATE_FRAMES")
-[ -n "${TRY_NICE:-}" ] && quota+=(--setenv="TRY_NICE=$TRY_NICE")
+[ -n "${TRY_PLAIN:-}" ] && quota+=(--setenv="TRY_PLAIN=1")
 # A transient service, as the organiser's systemd unit runs entries.
 sudo systemd-run --unit="$unit" --collect -p AllowedCPUs=0 "${quota[@]}" -p MemoryMax=1750M -p MemorySwapMax=0 -p LimitNOFILE="$limit" -p LimitCORE=infinity \
   -p AmbientCapabilities=CAP_NET_BIND_SERVICE -p StandardOutput="file:/tmp/$unit.log" -p StandardError="file:/tmp/$unit.log" \
@@ -111,6 +110,8 @@ if [ -f "/tmp/perf-$unit.data" ]; then
   echo "PROFILE $unit"
   sudo perf report -i "/tmp/perf-$unit.data" --stdio --no-children --sort sym -g none --percent-limit 0.7 2> /dev/null | grep -E '^ +[0-9]' | head -45
   sudo perf report -i "/tmp/perf-$unit.data" --stdio --no-children --sort dso -g none 2> /dev/null | grep -E '^ +[0-9]' | head -5
+  # What the largest kernel entry is really doing: it is where interrupts come back on.
+  sudo perf report -i "/tmp/perf-$unit.data" --stdio --no-children --symbols=_raw_spin_unlock_irqrestore --sort sym -g graph,2,callee --max-stack 12 2> /dev/null | grep -v '^#' | head -70
   echo "PROFILE end"
 fi
 line=$(grep LOAD "/tmp/load-$unit.log")

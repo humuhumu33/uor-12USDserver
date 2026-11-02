@@ -72,9 +72,10 @@ jobs:
           # Near the limit, interleaved so drift on this machine hits both servers.
           # 73%: the quota at which the control spends the same share here at 295k as on the box (59% against 81%).
           export CPU_QUOTA=73%
-          # Each variant twice, interleaved. server users gate_frames nice
-          for run in "ours 310000 4000 19" "ours 310000 16000 19" "ours 310000 4000 10" "control 310000 - -" "ours 310000 4000 19" "ours 310000 16000 19" "ours 310000 4000 10" "control 310000 - -"; do
-            read -r server users gate nice_level <<< "$run"
-            echo "=== $server at $users users, gate=$gate nice=$nice_level"
-            TRY_GATE_FRAMES=$gate TRY_NICE=$nice_level bash rig/measure.sh "$server" "$users" 90 150 "$RUNNER_TEMP/challenge" "$PWD/rig"
+          # Each variant three times, interleaved, then one profile. server users plain profile
+          for run in "ours 310000 1 0" "ours 310000 - 0" "control 310000 - 0" "ours 310000 1 0" "ours 310000 - 0" "control 310000 - 0" "ours 310000 1 0" "ours 310000 - 0" "ours 310000 - 1"; do
+            read -r server users plain profile <<< "$run"
+            echo "=== $server at $users users, plain=$plain profile=$profile"
+            [ "$plain" = 1 ] && export TRY_PLAIN=1 || unset TRY_PLAIN
+            PROFILE=$profile bash rig/measure.sh "$server" "$users" 90 150 "$RUNNER_TEMP/challenge" "$PWD/rig"
           done
