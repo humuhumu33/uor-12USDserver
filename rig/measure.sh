@@ -21,8 +21,8 @@ if [ "$name" = floor ]; then
 elif [ "$name" = ours ]; then
   command=(/bin/bash "$rig/../server/start.sh")
   limit=65535
-elif [ "$name" = before ]; then
-  command=(/bin/bash /tmp/before/server/start.sh)
+elif [[ "$name" == v-* ]]; then
+  command=(/bin/bash "/tmp/variants/$name/start.sh")
   limit=65535
 else
   command=(/bin/bash "$challenge/submissions/c-iouring-pavlyhalim/start.sh")

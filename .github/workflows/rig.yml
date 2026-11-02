@@ -8,15 +8,15 @@ permissions:
   contents: read
 env:
   CHALLENGE_COMMIT: c7764b60
-  BEFORE_COMMIT: e3e97f72051fe443ac3cdea9f743b23906f0c15d
 jobs:
   measure:
     # One job, so every server shares a machine. Runners differ between jobs.
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: Prepare the machine
         shell: bash
@@ -60,13 +60,23 @@ jobs:
           cp -r server/. "$RUNNER_TEMP/challenge/submissions/ours-under-test/"
           cd "$RUNNER_TEMP/challenge"
           bash test/run.sh submissions/ours-under-test 2>&1 | tail -40
-      - name: Build the server as it was before the multishot receive
-        timeout-minutes: 10
+      - name: Build one variant per setting under test
+        timeout-minutes: 15
         shell: bash
         run: |
-          git fetch -q --depth=1 origin "$BEFORE_COMMIT"
-          git worktree add -q /tmp/before "$BEFORE_COMMIT"
-          bash /tmp/before/server/build.sh 2>&1 | tail -1
+          # Each differs from the server in one setting, so what a run measures is that setting.
+          build_variant() {
+            local name="$1" from="$2" to="$3"
+            mkdir -p /tmp/variants
+            cp -r server "/tmp/variants/$name"
+            grep -q "$from" "/tmp/variants/$name/src/server.c" || { echo "no $from"; exit 1; }
+            sed -i "s/$from/$to/" "/tmp/variants/$name/src/server.c"
+            bash "/tmp/variants/$name/build.sh" 2>&1 | tail -1
+          }
+          build_variant v-nice19 "define CHECKPOINT_NICE 10" "define CHECKPOINT_NICE 19"
+          build_variant v-wait "define WAIT_COMPLETIONS 64" "define WAIT_COMPLETIONS 256"
+          build_variant v-hold250 "define WAL_GATE_NANOSECONDS 1000000000LL" "define WAL_GATE_NANOSECONDS 250000000LL"
+          build_variant v-cache32 "cache_size = -8192" "cache_size = -32768"
       - name: Build the control
         shell: bash
         run: |
@@ -82,8 +92,10 @@ jobs:
           # Near the limit, interleaved so drift on this machine hits both servers.
           # 73%: the quota at which the control spends the same share here at 295k as on the box (59% against 81%).
           export CPU_QUOTA=73%
-          for run in "before 310000" "ours 310000" "before 310000" "ours 310000" "before 310000" "ours 310000" "before 360000" "ours 360000"; do
-            read -r server users <<< "$run"
+          # A load near this CPU's limit, or nothing separates the settings: runners differ.
+          users=310000
+          grep -q 'EPYC 7763' /proc/cpuinfo || users=360000
+          for server in ours v-nice19 v-wait v-hold250 v-cache32 control ours v-nice19 v-wait v-hold250 v-cache32 control; do
             echo "=== $server at $users users"
             bash rig/measure.sh "$server" "$users" 90 150 "$RUNNER_TEMP/challenge" "$PWD/rig"
           done
