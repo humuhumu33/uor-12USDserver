@@ -45,12 +45,14 @@ jobs:
           jq -r '.[].token' seed/tokens.json > tokens.txt
           wc -l tokens.txt
       - name: Build our server
+        timeout-minutes: 10
         shell: bash
         run: |
           sudo bash server/install.sh
           bash server/build.sh 2>&1 | grep -v 'sqlite3.c' | tail -30
           ls -la server/bin/server
       - name: The 42 tests
+        timeout-minutes: 10
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/challenge/submissions/ours-under-test"

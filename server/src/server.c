@@ -1450,8 +1450,8 @@ static void queue_read(int index, uint32_t slot) {
 // Reads what is waiting as soon as it is known to be waiting, up to the free buffers.
 static int issue_reads(void) {
     int issued = 0;
-    uint32_t backlog = request_count - request_head;
-    uint32_t room = backlog + BUFFER_COUNT * MAX_RINGS < MAX_REQUESTS ? MAX_REQUESTS - backlog - BUFFER_COUNT * MAX_RINGS : 0;
+    // Reads already in flight can overfill the queue, and take_bytes runs a batch when they do.
+    uint32_t room = MAX_REQUESTS - (request_count - request_head);
     for (int index = 0; index < ring_count; index++) {
         Ring *ring = &rings[index];
         uint32_t n = ring->queued < ring->free_buffers ? ring->queued : ring->free_buffers;
@@ -1688,7 +1688,8 @@ static void hold_request(Request *r) {
         if (r->username_len) h->username = h->owned;
         if (r->text_len) h->text = h->owned + r->username_len;
     }
-    rings[r->ring].conns[r->slot].held++;
+    Conn *c = &rings[r->ring].conns[r->slot];
+    if (c->generation == r->generation) c->held++;
     r->kind = K_HELD;
     if (held_count > stat_held_most) stat_held_most = held_count;
 }

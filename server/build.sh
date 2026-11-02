@@ -23,7 +23,8 @@ else
   rm -f bin/*.gcda
   gcc "${FLAGS[@]}" -fprofile-generate -fprofile-update=single -o bin/server src/server.c "${LINK[@]}"
   training=$(mktemp -d)
-  SERVER_PROFILE_TRAINING=400000 SQLITE_PATH="$training/train.db" JWT_SECRET=profile-training HOST=127.0.0.1 PORT=39871 bin/server
+  # A server that stops answering must fail the build, not hang it.
+  SERVER_PROFILE_TRAINING=400000 SQLITE_PATH="$training/train.db" JWT_SECRET=profile-training HOST=127.0.0.1 PORT=39871 timeout 300 bin/server
   rm -rf "$training"
   gcc "${FLAGS[@]}" -fprofile-use -fprofile-correction -Wno-missing-profile -o bin/server src/server.c "${LINK[@]}"
 fi
