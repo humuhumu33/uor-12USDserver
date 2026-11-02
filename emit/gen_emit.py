@@ -37,7 +37,6 @@ for line in archive.decode().splitlines(keepends=True):
             parts.append(text(piece))
 
 sections = ""
-body = "seed"
 for start in range(0, len(parts), APPENDS):
     number = start // APPENDS
     inner = "seed"
@@ -47,7 +46,20 @@ for start in range(0, len(parts), APPENDS):
         "definition{\n  name: section" + str(number) + ",\n  parameters: [seed : Bytes],\n  result: Bytes,\n"
         f"  body: {inner},\n  executable: true\n}}\n\n"
     )
-    body = f"(section{number} {body})"
+
+# The same limit applies to calls, so sections are grouped, sixteen to a chapter.
+count = (len(parts) + APPENDS - 1) // APPENDS
+body = "seed"
+for start in range(0, count, APPENDS):
+    number = start // APPENDS
+    inner = "seed"
+    for section in range(start, min(start + APPENDS, count)):
+        inner = f"(section{section} {inner})"
+    sections += (
+        "definition{\n  name: chapter" + str(number) + ",\n  parameters: [seed : Bytes],\n  result: Bytes,\n"
+        f"  body: {inner},\n  executable: true\n}}\n\n"
+    )
+    body = f"(chapter{number} {body})"
 
 (root / "src").mkdir(parents=True, exist_ok=True)
 (root / "src" / "Emit.lex.tex").write_text(
