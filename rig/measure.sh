@@ -25,6 +25,12 @@ else
   command=(/bin/bash "$challenge/submissions/c-iouring-pavlyhalim/start.sh")
   limit=65535
 fi
+# A server from an earlier step can still be shutting down.
+for _ in $(seq 1 30); do
+  [ -z "$(ss -Hltn "sport = :$port")" ] && break
+  sleep 1
+done
+sudo ss -Hltnp "sport = :$port" | cut -c1-200
 # A transient service, as the organiser's systemd unit runs entries.
 sudo systemd-run --unit="$unit" --collect -p AllowedCPUs=0 -p MemoryMax=1750M -p MemorySwapMax=0 -p LimitNOFILE="$limit" -p LimitCORE=infinity \
   -p AmbientCapabilities=CAP_NET_BIND_SERVICE -p StandardOutput="file:/tmp/$unit.log" -p StandardError="file:/tmp/$unit.log" \
