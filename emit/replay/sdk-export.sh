@@ -9,30 +9,38 @@ mkdir -p "$project/src" "$out"
 cp emit/project/lexlean.toml emit/project/lean-toolchain emit/project/lakefile.toml emit/project/lake-manifest.json emit/project/lexlean.lock "$project/"
 cp emit/project/src/Emit.lex.tex "$project/src/"
 cd "$project" || exit 1
-start=$(date +%s)
 lexlean build
-echo "BUILD exit $? seconds=$(( $(date +%s) - start ))"
-find . -name '*.lean' | grep -v '.lake' | xargs wc -c | tail -12
-echo "IMPORTS"
-find . -name '*.lean' | grep -v '.lake' | xargs grep -h '^import ' | sort | uniq -c | sort -rn | head -20
-echo "LEANPATH candidates"
-lexlean --version | head -3
-for name in LexLeanRuntime LexLeanText LexLeanModels; do
-  find / -name "$name.lean" -not -path '/proc/*' -not -path '/sys/*' 2> /dev/null | head -3
-  find / -name "$name.olean" -not -path '/proc/*' -not -path '/sys/*' 2> /dev/null | head -3
+echo "BUILD exit $?"
+find . -name '*.lean' -not -path '*/.lake/*' | tar -cf "$out/lean.tar" -T -
+echo "RUNTIME anything named for it, on disk"
+find / \( -path '*LexLeanRuntime*' -o -path '*lexlean*runtime*' \) -not -path '/proc/*' -not -path '/sys/*' -not -path "$repo/*" 2> /dev/null | head -30
+echo "RUNTIME in this project"
+find . -path '*LexLean*' | head -20
+echo "RUNTIME what a verify passes to Lean"
+strace -f -e trace=execve -s 300 -o "$project/trace.txt" lexlean verify > /dev/null 2>&1
+grep -E 'lean|lake' "$project/trace.txt" | head -6 | cut -c1-500
+grep -oE 'LEAN_PATH=[^"]*' "$project/trace.txt" | sort -u | head -3
+env | grep -iE 'lean|elan' | head
+which lean lake elan 2> /dev/null
+lean --print-libdir 2> /dev/null
+lean_path=$(grep -oE 'LEAN_PATH=[^"]*' "$project/trace.txt" | head -1 | cut -d= -f2-)
+for dir in $(echo "$lean_path" | tr ':' ' '); do
+  echo "PATHDIR $dir"
+  ls "$dir" 2> /dev/null | head -8
 done
-find . -type f \( -name '*.lean' -o -name 'lakefile*' -o -name 'lake-manifest.json' -o -name 'lean-toolchain' \) -not -path '*/.lake/*' | tar -cf "$out/lean.tar" -T -
-# Everything the generated Lean imports that isn't Lean's own, as source if it can be found.
-for name in LexLeanRuntime LexLeanText LexLeanModels; do
-  file=$(find / -name "$name.lean" -not -path '/proc/*' -not -path '/sys/*' 2> /dev/null | head -1)
-  if [ -n "$file" ]; then
-    echo "SOURCE $name $file"
-    cp "$file" "$out/"
-    dir=$(dirname "$file")
-    ls "$dir" | head -20
-    sed -n 1,12p "$file" | cut -c1-120
-    [ -d "$dir/$name" ] && tar -C "$dir" -rf "$out/support.tar" "$name"
-  fi
-done
+# Whatever holds it, as source if there is source.
+file=$(find / -path '*LexLeanRuntime/Portable.lean' -not -path '/proc/*' -not -path '/sys/*' 2> /dev/null | head -1)
+if [ -n "$file" ]; then
+  root=$(dirname "$(dirname "$file")")
+  echo "SOURCE $file root=$root"
+  wc -c "$file"
+  ls "$root/LexLeanRuntime" | head -20
+  sed -n 1,14p "$file" | cut -c1-120
+  grep -E '^(public )?import ' "$root"/LexLeanRuntime/*.lean | head -12
+  tar -C "$root" -cf "$out/support.tar" LexLeanRuntime LexLeanRuntime.lean 2> /dev/null || tar -C "$root" -cf "$out/support.tar" LexLeanRuntime
+  ls "$root" | grep -iE 'licen|copying|readme' | head
+else
+  echo "SOURCE none"
+fi
 ls -la "$out"
 exit 0

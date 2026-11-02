@@ -18,10 +18,10 @@ for f in "$input"/*.lean; do
   [ -e "$f" ] && cp "$f" . && echo "SUPPORT $(basename "$f")"
 done
 [ -f "$input/support.tar" ] && tar -xf "$input/support.tar"
-for lean_file in $(find . -name '*.lean' | grep -v '.lake' | grep -E 'Emit' | head -3); do
+ls "$work"; for lean_file in $(find . -name '*.lean' | grep -v '.lake' | grep -E 'Emit' | head -3); do
   start=$(date +%s)
   sudo systemd-run --scope --quiet -p MemoryMax=1750M -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" \
-    env PATH="$PATH" LEAN_PATH="$work" lean "$lean_file" > "$work/out.txt" 2>&1
+    env PATH="$PATH" LEAN_PATH="$work" lean -o "$work/LexLeanCheck.olean" "$lean_file" > "$work/out.txt" 2>&1
   code=$?
   echo "REPLAY file=$lean_file exit=$code seconds=$(( $(date +%s) - start ))"
   head -c 1500 "$work/out.txt"
