@@ -74,9 +74,10 @@ split_sockets() {
   sock=$(awk '$1 == "sock" {printf "%d", $2 / 1048576}' "$cgroup/memory.stat" 2> /dev/null)
   ticks=$(awk '{print $14 + $15}' "/proc/$load/stat" 2> /dev/null)
   if [ "${sock:-0}" -gt 40 ]; then
-    ss -Htn state established 2> /dev/null | awk -v port=":$port" -v sock="$sock" -v load_cpu="$((${ticks:-0} - last_load_ticks))" '
-      { if ($3 ~ port "$") { server_recv += $1; server_send += $2 } else if ($4 ~ port "$") { client_recv += $1; client_send += $2 } }
-      END { printf "SOCKETS sock=%d server_unread_mb=%.0f server_unacked_mb=%.0f client_unread_mb=%.0f client_unacked_mb=%.0f load_ticks=%d\n", sock, server_recv / 1048576, server_send / 1048576, client_recv / 1048576, client_send / 1048576, load_cpu }'
+    ss -Htn 2> /dev/null | awk -v port=":$port" -v sock="$sock" -v load_cpu="$((${ticks:-0} - last_load_ticks))" '
+      { states[$1]++; if ($4 ~ port "$") { server_recv += $2; server_send += $3 } else if ($5 ~ port "$") { client_recv += $2; client_send += $3 } }
+      END { printf "SOCKETS sock=%d server_unread_mb=%.0f server_unacked_mb=%.0f client_unread_mb=%.0f client_unacked_mb=%.0f load_ticks=%d", sock, server_recv / 1048576, server_send / 1048576, client_recv / 1048576, client_send / 1048576, load_cpu; for (k in states) printf " %s=%d", k, states[k]; printf "\n" }'
+    awk '/^TCP:/ {printf "SOCKSTAT %s\n", $0}' /proc/net/sockstat
   fi
   last_load_ticks=${ticks:-0}
 }
@@ -88,7 +89,7 @@ died() {
   memory_peaks
   tail -6 "$samples" 2> /dev/null | sed 's/^/LAST /'
   grep -v STATS "/tmp/$unit.log" | tail -12
-  grep STATS "/tmp/$unit.log" | tail -4
+  grep STATS "/tmp/$unit.log" | tail -12
   awk '$1 ~ /^(anon|file)$/' "$cgroup/memory.stat" 2> /dev/null
   sudo journalctl -u "$unit.service" -n 15 --no-pager 2>&1 | cut -c1-200
   sudo dmesg | grep -iE 'segfault|general protection|out of memory|oom-kill|killed process|tcp: out of' | tail -8 | cut -c1-240
