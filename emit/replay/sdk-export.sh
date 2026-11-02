@@ -1,46 +1,37 @@
 #!/bin/bash
-# Runs inside the locked SDK image. What does the module's generated Lean need in order to build without the SDK?
+# Runs inside the locked SDK image. Writes the plain Lean of the module and of the runtime it imports, for a machine
+# that has official Lean and nothing else.
 set -uo pipefail
 repo="$PWD"
 project="$repo/emit/work-replay"
 out="$repo/emit/out/replay"
+vendor=/opt/prismpm/share/conformance-root/vendor/lexlean
 rm -rf "$project" "$out"
-mkdir -p "$project/src" "$out"
-cp emit/project/lexlean.toml emit/project/lean-toolchain emit/project/lakefile.toml emit/project/lake-manifest.json emit/project/lexlean.lock "$project/"
-cp emit/project/src/Emit.lex.tex "$project/src/"
-cd "$project" || exit 1
-lexlean build
-echo "BUILD exit $?"
-find . -name '*.lean' -not -path '*/.lake/*' | tar -cf "$out/lean.tar" -T -
-echo "RUNTIME anything named for it, on disk"
-find / \( -path '*LexLeanRuntime*' -o -path '*lexlean*runtime*' \) -not -path '/proc/*' -not -path '/sys/*' -not -path "$repo/*" 2> /dev/null | head -30
-echo "RUNTIME in this project"
-find . -path '*LexLean*' | head -20
-echo "RUNTIME what a verify passes to Lean"
-strace -f -e trace=execve -s 300 -o "$project/trace.txt" lexlean verify > /dev/null 2>&1
-grep -E 'lean|lake' "$project/trace.txt" | head -6 | cut -c1-500
-grep -oE 'LEAN_PATH=[^"]*' "$project/trace.txt" | sort -u | head -3
-env | grep -iE 'lean|elan' | head
-which lean lake elan 2> /dev/null
-lean --print-libdir 2> /dev/null
-lean_path=$(grep -oE 'LEAN_PATH=[^"]*' "$project/trace.txt" | head -1 | cut -d= -f2-)
-for dir in $(echo "$lean_path" | tr ':' ' '); do
-  echo "PATHDIR $dir"
-  ls "$dir" 2> /dev/null | head -8
+mkdir -p "$project/emit/src" "$out/lean/UorEmit"
+cp emit/project/lexlean.toml emit/project/lean-toolchain emit/project/lakefile.toml emit/project/lake-manifest.json emit/project/lexlean.lock "$project/emit/"
+cp emit/project/src/Emit.lex.tex "$project/emit/src/"
+(cd "$project/emit" && lexlean build)
+echo "MODULE build exit $?"
+cp "$(find "$project/emit" -name Emit.lean -not -path '*/.lake/*' | head -1)" "$out/lean/UorEmit/Emit.lean"
+
+cp -r "$vendor/language/runtime-1.2/library" "$project/runtime"
+cat "$project/runtime/lexlean.toml" | head -14 | cut -c1-110
+(cd "$project/runtime" && lexlean lock > /dev/null 2>&1; lexlean build 2>&1 | tail -3 | cut -c1-300)
+echo "RUNTIME build exit $?"
+find "$project/runtime" -name '*.lean' -not -path '*/.lake/*' | head -12
+(cd "$project/runtime" && find . -name '*.lean' -not -path '*/.lake/*' | while read -r file; do
+  relative=$(echo "$file" | sed -E 's#.*/modules/##')
+  mkdir -p "$out/lean/$(dirname "$relative")"
+  cp "$file" "$out/lean/$relative"
+done)
+find "$out/lean" -name '*.lean' | xargs wc -c
+echo "IMPORTS"
+find "$out/lean" -name '*.lean' | xargs grep -hE '^(public )?import ' | sort | uniq -c
+echo "LICENCE"
+ls "$vendor" | head -30
+for name in LICENSE LICENSE-MIT LICENSE-APACHE COPYING; do
+  [ -f "$vendor/$name" ] && { echo "FOUND $name"; head -4 "$vendor/$name" | cut -c1-90; cp "$vendor/$name" "$out/"; }
 done
-# Whatever holds it, as source if there is source.
-file=$(find / -path '*LexLeanRuntime/Portable.lean' -not -path '/proc/*' -not -path '/sys/*' 2> /dev/null | head -1)
-if [ -n "$file" ]; then
-  root=$(dirname "$(dirname "$file")")
-  echo "SOURCE $file root=$root"
-  wc -c "$file"
-  ls "$root/LexLeanRuntime" | head -20
-  sed -n 1,14p "$file" | cut -c1-120
-  grep -E '^(public )?import ' "$root"/LexLeanRuntime/*.lean | head -12
-  tar -C "$root" -cf "$out/support.tar" LexLeanRuntime LexLeanRuntime.lean 2> /dev/null || tar -C "$root" -cf "$out/support.tar" LexLeanRuntime
-  ls "$root" | grep -iE 'licen|copying|readme' | head
-else
-  echo "SOURCE none"
-fi
+grep -m3 -iE 'license|repository' "$vendor/Cargo.toml" 2> /dev/null
 ls -la "$out"
 exit 0

@@ -1,30 +1,68 @@
 #!/bin/bash
-# Runs on a plain runner with official Lean only, under the box's memory. Can the theorems be checked on the box?
+# Runs on a plain runner with official Lean only, under the box's memory. Can the box itself check the theorems and
+# write the server's files, byte for byte?
 set -uo pipefail
 input="$(cd "$1" && pwd)"
+repo="$PWD"
 work="$RUNNER_TEMP/replay"
+rm -rf "$work"
 mkdir -p "$work"
+cp -r "$input/lean/." "$work/"
 cd "$work" || exit 1
-ls -la "$input"
-tar -xf "$input/lean.tar"
-find . -name '*.lean' | head -20
-curl -fsSL --retry 3 -o lean.tar.zst https://github.com/leanprover/lean4/releases/download/v4.32.1/lean-4.32.1-linux.tar.zst || exit 0
+find . -name '*.lean' | xargs wc -c
+curl -fsSL --retry 3 -o /tmp/lean.tar.zst https://github.com/leanprover/lean4/releases/download/v4.32.1/lean-4.32.1-linux.tar.zst || exit 1
+sha256sum /tmp/lean.tar.zst
 sudo apt-get install -y -qq zstd > /dev/null
-mkdir -p /tmp/lean && tar --use-compress-program=unzstd -xf lean.tar.zst -C /tmp/lean --strip-components=1
+mkdir -p /tmp/lean && tar --use-compress-program=unzstd -xf /tmp/lean.tar.zst -C /tmp/lean --strip-components=1
 export PATH="/tmp/lean/bin:$PATH"
 lean --version
 du -sh /tmp/lean
-for f in "$input"/*.lean; do
-  [ -e "$f" ] && cp "$f" . && echo "SUPPORT $(basename "$f")"
-done
-[ -f "$input/support.tar" ] && tar -xf "$input/support.tar"
-ls "$work"; for lean_file in $(find . -name '*.lean' | grep -v '.lake' | grep -E 'Emit' | head -3); do
-  start=$(date +%s)
-  sudo systemd-run --scope --quiet -p MemoryMax=1750M -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" \
-    env PATH="$PATH" LEAN_PATH="$work" lean -o "$work/LexLeanCheck.olean" "$lean_file" > "$work/out.txt" 2>&1
-  code=$?
-  echo "REPLAY file=$lean_file exit=$code seconds=$(( $(date +%s) - start ))"
-  head -c 1500 "$work/out.txt"
-  echo
-done
+printf 'leanprover/lean4:v4.32.1\n' > lean-toolchain
+cat > lakefile.toml <<'TOML'
+name = "replay"
+defaultTargets = ["UorEmit"]
+
+[[lean_lib]]
+name = "LexLeanRuntime"
+
+[[lean_lib]]
+name = "UorEmit"
+TOML
+cat > Write.lean <<'LEAN'
+import UorEmit.Emit
+
+def main : IO Unit :=
+  IO.FS.writeBinFile "archive.bin" (UorEmit.Emit.emitSource ByteArray.empty)
+LEAN
+limit() { sudo systemd-run --scope --quiet -p AllowedCPUs=0 -p MemoryMax=1750M -p MemorySwapMax=0 --uid="$(id -u)" --gid="$(id -g)" env PATH="$PATH" HOME="$HOME" "$@"; }
+
+start=$(date +%s)
+limit /usr/bin/time -v lake build > build.txt 2>&1
+code=$?
+echo "BUILD exit=$code seconds=$(( $(date +%s) - start )) $(grep 'Maximum resident' build.txt | sed 's/.*: //') kB resident"
+tail -25 build.txt | grep -vE 'Maximum|Average|Page|Swaps|File system|Socket|Signals|Voluntary|Involuntary|Exit status|Percent|Major|Minor|Command|Elapsed|System time|User time' | cut -c1-300
+du -sh .lake 2> /dev/null
+grep -c 'theorem ' UorEmit/Emit.lean
+[ "$code" = 0 ] || exit 0
+
+start=$(date +%s)
+limit /usr/bin/time -v lake env lean --run Write.lean > run.txt 2>&1
+code=$?
+echo "WRITE exit=$code seconds=$(( $(date +%s) - start )) $(grep 'Maximum resident' run.txt | sed 's/.*: //') kB resident"
+[ "$code" = 0 ] || { head -c 1500 run.txt; exit 0; }
+wc -c archive.bin
+python3 - "$repo/server" <<'PY'
+import pathlib, sys
+root = pathlib.Path(sys.argv[1])
+data = pathlib.Path("archive.bin").read_bytes()
+bad = 0
+for entry in data.split(b"\0"):
+    if not entry:
+        continue
+    name, _, content = entry.partition(b"\n")
+    same = (root / name.decode()).read_bytes() == content
+    print("IDENTICAL" if same else "DIFFERENT", name.decode())
+    bad |= not same
+print("REPLAY bad=%d" % bad)
+PY
 exit 0
