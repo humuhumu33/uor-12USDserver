@@ -37,6 +37,13 @@ sudo ss -Hltnp "sport = :$port" | cut -c1-200
 # CPU_QUOTA emulates a slower CPU, so a server can reach its limit here before it reaches the memory limit.
 quota=()
 [ -n "${CPU_QUOTA:-}" ] && quota=(-p "CPUQuota=$CPU_QUOTA" -p CPUQuotaPeriodSec=5ms)
+# CPU_SHARE emulates a slower CPU without a quota: a process competes for the same CPU, so the server gets that share
+# when both want it and all of it otherwise, and no kernel work charged to it can run up a debt that freezes it.
+if [ -n "${CPU_SHARE:-}" ]; then
+  quota=(-p CPUWeight=100)
+  sudo systemd-run --unit=cpu-rival --collect -p AllowedCPUs=0 -p CPUWeight="$((100 * (100 - CPU_SHARE) / CPU_SHARE))" /bin/bash -c 'while :; do :; done'
+  trap 'sudo systemctl stop cpu-rival.service 2> /dev/null' EXIT
+fi
 # A transient service, as the organiser's systemd unit runs entries.
 sudo systemd-run --unit="$unit" --collect -p AllowedCPUs=0 "${quota[@]}" -p MemoryMax=1750M -p MemorySwapMax=0 -p LimitNOFILE="$limit" -p LimitCORE=infinity \
   -p AmbientCapabilities=CAP_NET_BIND_SERVICE -p StandardOutput="file:/tmp/$unit.log" -p StandardError="file:/tmp/$unit.log" \

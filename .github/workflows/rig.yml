@@ -97,10 +97,12 @@ jobs:
           bash rig/measure.sh v-multishot "$users" 90 150 "$RUNNER_TEMP/challenge" "$PWD/rig" | tee /tmp/calibrate.txt | grep -E 'RESULT|LOAD |SERVER DIED'
           needed=$(sed -nE 's/.*cpu_pct=([0-9]+).*/\1/p' /tmp/calibrate.txt | tail -1)
           [ -n "$needed" ] || { echo "no calibration"; exit 1; }
-          # A capped run uses less than an uncapped one, so five points under is what bites.
-          export CPU_QUOTA="$((needed - 5))%"
-          echo "CALIBRATED needed=$needed quota=$CPU_QUOTA"
-          for users in 320000 340000 320000 340000 320000 340000; do
-            echo "=== v-multishot at $users users"
-            bash rig/measure.sh v-multishot "$users" 90 150 "$RUNNER_TEMP/challenge" "$PWD/rig"
+          # Five points under what it used uncapped, so it saturates. A rival process instead of a quota: see measure.sh.
+          export CPU_SHARE="$((needed - 5))"
+          echo "CALIBRATED needed=$needed share=$CPU_SHARE"
+          for run in "v-multishot 320000" "control 320000" "v-multishot 340000" "control 340000" "v-multishot 320000" "control 320000" "v-multishot 340000" "control 340000"; do
+            read -r server users <<< "$run"
+            echo "=== $server at $users users"
+            bash rig/measure.sh "$server" "$users" 90 150 "$RUNNER_TEMP/challenge" "$PWD/rig"
+            sleep 3
           done
