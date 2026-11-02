@@ -39,7 +39,7 @@ generate() {
   mkdir -p "$project"
   cp emit/project/lexlean.toml emit/project/lean-toolchain emit/project/lakefile.toml emit/project/lake-manifest.json "$project/"
   python3 emit/gen_emit.py server "$project" || exit 1
-  (cd "$project" && lexlean fmt && lexlean lock > /dev/null) || exit 1
+  (cd "$project" && lexlean lock > /dev/null && lexlean fmt && lexlean lock > /dev/null) || exit 1
 }
 
 is_fresh() {
