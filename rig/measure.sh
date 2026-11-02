@@ -34,6 +34,8 @@ sudo ss -Hltnp "sport = :$port" | cut -c1-200
 # CPU_QUOTA emulates a slower CPU, so a server can reach its limit here before it reaches the memory limit.
 quota=()
 [ -n "${CPU_QUOTA:-}" ] && quota=(-p "CPUQuota=$CPU_QUOTA" -p CPUQuotaPeriodSec=5ms)
+[ -n "${TRY_GATE_FRAMES:-}" ] && quota+=(--setenv="TRY_GATE_FRAMES=$TRY_GATE_FRAMES")
+[ -n "${TRY_NICE:-}" ] && quota+=(--setenv="TRY_NICE=$TRY_NICE")
 # A transient service, as the organiser's systemd unit runs entries.
 sudo systemd-run --unit="$unit" --collect -p AllowedCPUs=0 "${quota[@]}" -p MemoryMax=1750M -p MemorySwapMax=0 -p LimitNOFILE="$limit" -p LimitCORE=infinity \
   -p AmbientCapabilities=CAP_NET_BIND_SERVICE -p StandardOutput="file:/tmp/$unit.log" -p StandardError="file:/tmp/$unit.log" \
@@ -96,6 +98,7 @@ for _ in $(seq 1 "$hold"); do
   [ -f "$cgroup/cpu.stat" ] || died "during the hold"
 done
 echo "MEMORY $(memory_breakdown)"
+echo "CPUSTAT $(awk '$1 ~ /^(user_usec|system_usec|nr_periods|nr_throttled|throttled_usec)$/ {printf "%s=%s ", $1, $2}' "$cgroup/cpu.stat")"
 usage_end=$(awk '/usage_usec/ {print $2}' "$cgroup/cpu.stat")
 peak=$(cat "$cgroup/memory.peak")
 current=$(cat "$cgroup/memory.current")

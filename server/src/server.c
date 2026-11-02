@@ -494,9 +494,9 @@ static void check_columns(const char *table, const char *expected) {
  * finish while commits keep arriving, and the log only restarts once it has, so under steady writes it grows
  * as dirty memory until the box runs out. Past WAL_GATE_FRAMES writes wait, reads go on, and the log restarts. */
 #define CHECKPOINT_FRAMES 1000
-#define WAL_GATE_FRAMES 4000
-#define WAL_INLINE_FRAMES 16384
 #define WAL_GATE_NANOSECONDS 1000000000LL
+// Experiments set these through TRY_GATE_FRAMES and TRY_NICE. Remove before submission.
+static int wal_gate_frames = 4000, wal_inline_frames = 16384, checkpoint_nice = 19;
 static sqlite3 *checkpoint_db;
 static pthread_mutex_t checkpoint_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t checkpoint_cond = PTHREAD_COND_INITIALIZER;
@@ -504,10 +504,19 @@ static int checkpoint_wanted, wal_gate, wal_frames;
 static uint64_t commit_number, checkpointed_commit;
 static int64_t wal_gate_since;
 static uint64_t stat_gates, stat_gate_timeouts, stat_inline, stat_held_most, stat_queue_most, stat_frames_most;
+static int stats_on;
+static int64_t stat_gate_ns, stat_gate_most_ns, stat_turn_most_ns, stat_off_cpu_most_ns, stat_off_cpu_ns, stat_commit_most_ns;
+static int64_t stat_pass_most_ns, stat_passes, stat_checkpoint_cpu_ns;
 
 static int64_t monotonic_nanoseconds(void) {
     struct timespec t;
     clock_gettime(CLOCK_MONOTONIC, &t);
+    return (int64_t)t.tv_sec * 1000000000LL + t.tv_nsec;
+}
+
+static int64_t thread_cpu_nanoseconds(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_THREAD_CPUTIME_ID, &t);
     return (int64_t)t.tv_sec * 1000000000LL + t.tv_nsec;
 }
 
@@ -516,7 +525,7 @@ static int wal_hook(void *arg, sqlite3 *d, const char *name, int frames) {
     wal_frames = frames;
     if ((uint64_t)frames > stat_frames_most) stat_frames_most = (uint64_t)frames;
     __atomic_store_n(&commit_number, commit_number + 1, __ATOMIC_RELEASE);
-    if (frames >= WAL_GATE_FRAMES && !wal_gate) {
+    if (frames >= wal_gate_frames && !wal_gate) {
         wal_gate_since = monotonic_nanoseconds();
         __atomic_store_n(&wal_gate, 1, __ATOMIC_RELEASE);
         stat_gates++;
@@ -532,7 +541,7 @@ static int wal_hook(void *arg, sqlite3 *d, const char *name, int frames) {
 
 static void *checkpoint_main(void *arg) {
     (void)arg;
-    setpriority(PRIO_PROCESS, 0, 19);
+    setpriority(PRIO_PROCESS, 0, checkpoint_nice);
     for (;;) {
         pthread_mutex_lock(&checkpoint_lock);
         while (!checkpoint_wanted) pthread_cond_wait(&checkpoint_cond, &checkpoint_lock);
@@ -540,7 +549,12 @@ static void *checkpoint_main(void *arg) {
         pthread_mutex_unlock(&checkpoint_lock);
         uint64_t seen = __atomic_load_n(&commit_number, __ATOMIC_ACQUIRE);
         int log = 0, done = 0;
+        int64_t pass_start = monotonic_nanoseconds();
         int rc = sqlite3_wal_checkpoint_v2(checkpoint_db, "main", SQLITE_CHECKPOINT_PASSIVE, &log, &done);
+        int64_t pass_ns = monotonic_nanoseconds() - pass_start;
+        if (pass_ns > __atomic_load_n(&stat_pass_most_ns, __ATOMIC_RELAXED)) __atomic_store_n(&stat_pass_most_ns, pass_ns, __ATOMIC_RELAXED);
+        __atomic_store_n(&stat_passes, stat_passes + 1, __ATOMIC_RELAXED);
+        __atomic_store_n(&stat_checkpoint_cpu_ns, thread_cpu_nanoseconds(), __ATOMIC_RELAXED);
         int complete = rc == SQLITE_OK && log == done;
         if (complete) __atomic_store_n(&checkpointed_commit, seen, __ATOMIC_RELEASE);
         // No commit will wake this thread while writes are held.
@@ -642,7 +656,13 @@ static int batch_end(void) {
     cursors_end();
     if (!in_batch) return 0;
     in_batch = 0;
-    if (step_reset(st_commit) == SQLITE_DONE) return 0;
+    int64_t commit_start = stats_on ? monotonic_nanoseconds() : 0;
+    int rc = step_reset(st_commit);
+    if (UNLIKELY(stats_on)) {
+        int64_t commit_ns = monotonic_nanoseconds() - commit_start;
+        if (commit_ns > stat_commit_most_ns) stat_commit_most_ns = commit_ns;
+    }
+    if (rc == SQLITE_DONE) return 0;
     step_reset(st_rollback);
     return -1;
 }
@@ -1758,8 +1778,13 @@ static void run_batch(void) {
     if (!queued && !held_count) return;
     batch_number++;
     if (!choose_arena()) return;
-    if (UNLIKELY(wal_gate) && wal_gate_opens()) __atomic_store_n(&wal_gate, 0, __ATOMIC_RELEASE);
-    if (UNLIKELY(wal_frames >= WAL_INLINE_FRAMES)) {
+    if (UNLIKELY(wal_gate) && wal_gate_opens()) {
+        int64_t gate_ns = monotonic_nanoseconds() - wal_gate_since;
+        stat_gate_ns += gate_ns;
+        if (gate_ns > stat_gate_most_ns) stat_gate_most_ns = gate_ns;
+        __atomic_store_n(&wal_gate, 0, __ATOMIC_RELEASE);
+    }
+    if (UNLIKELY(wal_frames >= wal_inline_frames)) {
         // Last resort: the checkpoint thread is too far behind for the log to stay in memory.
         sqlite3_wal_checkpoint_v2(db, "main", SQLITE_CHECKPOINT_PASSIVE, NULL, NULL);
         wal_frames = 0;
@@ -1949,6 +1974,11 @@ int main(void) {
     } else {
         lock_code();
     }
+    if (getenv("TRY_GATE_FRAMES")) {
+        wal_gate_frames = atoi(getenv("TRY_GATE_FRAMES"));
+        wal_inline_frames = wal_gate_frames * 4;
+    }
+    if (getenv("TRY_NICE")) checkpoint_nice = atoi(getenv("TRY_NICE"));
     struct rlimit nofile;
     getrlimit(RLIMIT_NOFILE, &nofile);
     nofile.rlim_cur = nofile.rlim_max;
@@ -1979,7 +2009,7 @@ int main(void) {
     fprintf(stderr, "listening, %u connections per ring\n", table_size);
     struct __kernel_timespec timeout = {.tv_sec = 0, .tv_nsec = WAIT_NANOSECONDS};
     uint64_t next_stats = 0;
-    int stats = getenv("SERVER_STATS") != NULL;
+    stats_on = getenv("SERVER_STATS") != NULL;
     memset(requests, 0, sizeof requests);
     for (;;) {
         struct io_uring_cqe *cqe;
@@ -1987,10 +2017,20 @@ int main(void) {
         io_uring_submit_and_wait_timeout(&rings[0].ring, &cqe, request_count > request_head ? 0 : WAIT_COMPLETIONS, &timeout, NULL);
         rings[0].pending_sqes = 0;
         now_seconds = (uint64_t)time(0);
-        if (UNLIKELY(stats && now_seconds >= next_stats)) {
+        if (UNLIKELY(stats_on && now_seconds >= next_stats)) {
             next_stats = now_seconds + 10;
-            fprintf(stderr, "STATS gates=%lu gate_timeouts=%lu inline=%lu frames_most=%lu queue_most=%lu held_most=%lu rings=%d\n", stat_gates, stat_gate_timeouts, stat_inline, stat_frames_most, stat_queue_most, stat_held_most, ring_count);
+            fprintf(stderr, "STATS gates=%lu gate_timeouts=%lu inline=%lu frames_most=%lu queue_most=%lu held_most=%lu rings=%d gate_ms=%ld gate_most_ms=%ld turn_most_ms=%ld off_cpu_ms=%ld off_cpu_most_ms=%ld commit_most_ms=%ld passes=%ld pass_most_ms=%ld checkpoint_cpu_ms=%ld\n",
+                stat_gates, stat_gate_timeouts, stat_inline, stat_frames_most, stat_queue_most, stat_held_most, ring_count,
+                stat_gate_ns / 1000000, stat_gate_most_ns / 1000000, stat_turn_most_ns / 1000000, stat_off_cpu_ns / 1000000, stat_off_cpu_most_ns / 1000000, stat_commit_most_ns / 1000000,
+                (long)__atomic_load_n(&stat_passes, __ATOMIC_RELAXED), (long)__atomic_load_n(&stat_pass_most_ns, __ATOMIC_RELAXED) / 1000000, (long)__atomic_load_n(&stat_checkpoint_cpu_ns, __ATOMIC_RELAXED) / 1000000);
             stat_frames_most = stat_queue_most = stat_held_most = 0;
+            stat_gate_ns = stat_gate_most_ns = stat_turn_most_ns = stat_off_cpu_ns = stat_off_cpu_most_ns = stat_commit_most_ns = 0;
+            __atomic_store_n(&stat_pass_most_ns, 0, __ATOMIC_RELAXED);
+        }
+        int64_t turn_start = 0, cpu_start = 0;
+        if (UNLIKELY(stats_on)) {
+            turn_start = monotonic_nanoseconds();
+            cpu_start = thread_cpu_nanoseconds();
         }
         for (int rounds = 0; rounds < 4; rounds++) {
             int seen = 0;
@@ -2000,5 +2040,13 @@ int main(void) {
             if (!seen && !issued) break;
         }
         run_batch();
+        if (UNLIKELY(stats_on)) {
+            // Wall time over CPU time: the loop was blocked in the kernel or waiting for the CPU.
+            int64_t turn_ns = monotonic_nanoseconds() - turn_start;
+            int64_t off_ns = turn_ns - (thread_cpu_nanoseconds() - cpu_start);
+            if (turn_ns > stat_turn_most_ns) stat_turn_most_ns = turn_ns;
+            if (off_ns > stat_off_cpu_most_ns) stat_off_cpu_most_ns = off_ns;
+            stat_off_cpu_ns += off_ns;
+        }
     }
 }
