@@ -78,6 +78,14 @@ split_sockets() {
       { states[$1]++; if ($4 ~ port "$") { server_recv += $2; server_send += $3 } else if ($5 ~ port "$") { client_recv += $2; client_send += $3 } }
       END { printf "SOCKETS sock=%d server_unread_mb=%.0f server_unacked_mb=%.0f client_unread_mb=%.0f client_unacked_mb=%.0f load_ticks=%d", sock, server_recv / 1048576, server_send / 1048576, client_recv / 1048576, client_send / 1048576, load_cpu; for (k in states) printf " %s=%d", k, states[k]; printf "\n" }'
     awk '/^TCP:/ {printf "SOCKSTAT %s\n", $0}' /proc/net/sockstat
+    # What the server's threads are doing in the kernel while the bytes pile up, for the first few jumps of a run.
+    if [ "${thread_dumps:-0}" -lt 4 ]; then
+      thread_dumps=$((${thread_dumps:-0} + 1))
+      echo "PRESSURE memory=$(sed -n 1p /proc/pressure/memory) io=$(sed -n 1p /proc/pressure/io) cpu=$(sed -n 1p /proc/pressure/cpu)"
+      for task in /proc/"$(head -1 "$cgroup/cgroup.procs" 2> /dev/null)"/task/*; do
+        echo "THREAD $(basename "$task") state=$(awk '{print $3}' "$task/stat" 2> /dev/null) wchan=$(sudo cat "$task/wchan" 2> /dev/null) stack=$(sudo cat "$task/stack" 2> /dev/null | head -8 | awk '{print $2}' | tr '\n' ' ')"
+      done
+    fi
   fi
   last_load_ticks=${ticks:-0}
 }
