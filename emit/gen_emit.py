@@ -6,7 +6,6 @@ Each file in the archive is its path, a newline, its length in decimal, a newlin
 import pathlib
 import sys
 
-CHUNK = 1024
 # Sixteen appends per definition keep the nesting under the semantic-module JSON recursion limit.
 APPENDS = 16
 FILES = ["src/server.c", "build.sh", "install.sh", "start.sh", ".gitignore", "README.md"]
@@ -19,14 +18,31 @@ for name in FILES:
     content = (source / name).read_bytes()
     archive += name.encode() + b"\n" + str(len(content)).encode() + b"\n" + content
 
-parts = [archive[i : i + CHUNK] for i in range(0, len(archive), CHUNK)]
+
+def text(piece):
+    """One literal: readable text, with the escapes LexLean strings accept."""
+    escaped = piece.decode().replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n").replace("\t", "\\t").replace("\r", "\\r")
+    return f'(prim utf8_encode "{escaped}" : Bytes)'
+
+
+# One literal per source line, so the module reads as the source does.
+# A percent sign is forbidden anywhere in a LexLean file, so it is written as a byte.
+parts = []
+for line in archive.decode().splitlines(keepends=True):
+    pieces = line.encode().split(b"%")
+    for number, piece in enumerate(pieces):
+        if number:
+            parts.append("0x25")
+        if piece:
+            parts.append(text(piece))
+
 sections = ""
 body = "seed"
 for start in range(0, len(parts), APPENDS):
     number = start // APPENDS
     inner = "seed"
     for part in parts[start : start + APPENDS]:
-        inner = f"(prim append {inner} 0x{part.hex()} : Bytes)"
+        inner = f"(prim append {inner}\n    {part} : Bytes)"
     sections += (
         "definition{\n  name: section" + str(number) + ",\n  parameters: [seed : Bytes],\n  result: Bytes,\n"
         f"  body: {inner},\n  executable: true\n}}\n\n"

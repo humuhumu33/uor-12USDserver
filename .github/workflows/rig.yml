@@ -69,6 +69,8 @@ jobs:
         shell: bash
         run: |
           sudo prlimit --pid $$ --nofile=1048576:1048576
+          # Runners differ by CPU model: compare only within one job, and read this line before comparing across jobs.
+          echo "RUNNER $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2) kernel=$(uname -r)"
           # Near the limit, interleaved so drift on this machine hits both servers.
           # 73%: the quota at which the control spends the same share here at 295k as on the box (59% against 81%).
           export CPU_QUOTA=73%

@@ -6,30 +6,11 @@ project="$repo/emit/work"
 rm -rf "$project"
 mkdir -p "$project"
 
-# Can source stay readable beside the literals? Each probe is a tiny module, and only its diagnostics matter.
-probe() {
-  local name="$1" middle="$2" dir="$project/probe-$1"
-  mkdir -p "$dir/src"
-  cp -r "$repo/feasibility/kernels/lexlean.toml" "$repo/feasibility/kernels/lean-toolchain" "$dir/"
-  printf 'name = "uor_emit_host"\nversion = "0.1.0"\n' > "$dir/lakefile.toml"
-  printf '{"version": "1.2.0",\n "packagesDir": ".lake/packages",\n "packages": [],\n "name": "uor_emit_host",\n "lakeDir": ".lake",\n "fixedToolchain": false}\n' > "$dir/lake-manifest.json"
-  sed -i 's/src\/Kernels.lex.tex/src\/Probe.lex.tex/; s/UorKernels/UorProbe/; s/uor-kernels/uor-probe/' "$dir/lexlean.toml"
-  printf '\\begin{lexlean}{Probe}\n\\useglossary{lexlean.std.nat@1.2.0}\n\\title{Natural number addition}\n%b\n\\end{lexlean}\n' "$middle" > "$dir/src/Probe.lex.tex"
-  (cd "$dir" && lexlean lock > /dev/null 2>&1; lexlean --diagnostic-format json check > out.txt 2>&1; echo "PROBE $name exit=$?"; head -c 700 out.txt; echo)
-}
-one='definition{\n  name: one,\n  parameters: [seed : Bytes],\n  result: Bytes,\n  body: (prim append seed 0x41 : Bytes),\n  executable: true\n}'
-two='definition{\n  name: two,\n  parameters: [seed : Bytes],\n  result: Bytes,\n  body: (one seed),\n  executable: true\n}'
-probe control "\\\\begin{semanticmodule}\n$one\n\\\\end{semanticmodule}"
-probe two_modules "\\\\begin{semanticmodule}\n$one\n\\\\end{semanticmodule}\n\\\\begin{semanticmodule}\n$two\n\\\\end{semanticmodule}"
-probe prose_between "\\\\begin{semanticmodule}\n$one\n\\\\end{semanticmodule}\nSome prose.\n\\\\begin{verbatim}\nint main(void) { return 42; }\n\\\\end{verbatim}\n\\\\begin{semanticmodule}\n$two\n\\\\end{semanticmodule}"
-probe verbatim_before "Some prose.\n\\\\begin{verbatim}\nint main(void) { return 42; }\n\\\\end{verbatim}\n\\\\begin{semanticmodule}\n$one\n\\\\end{semanticmodule}"
-probe comment_inside "\\\\begin{semanticmodule}\n%% int main(void) { return 42; }\n$one\n\\\\end{semanticmodule}"
-probe text_literal "\\\\begin{semanticmodule}\ndefinition{\n  name: one,\n  parameters: [seed : Bytes],\n  result: Bytes,\n  body: (prim append seed \"abc\" : Bytes),\n  executable: true\n}\n\\\\end{semanticmodule}"
-
 # The real server through the whole chain.
 python3 emit/gen_emit.py server "$project/emit"
 cd "$project/emit" || exit 1
 wc -c src/Emit.lex.tex
+sed -n '5,30p' src/Emit.lex.tex | cut -c1-150 | sed 's/^/SAMPLE /'
 lexlean production targets > targets.json
 python3 - > request.json <<'PY'
 import json
