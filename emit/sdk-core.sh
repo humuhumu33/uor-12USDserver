@@ -15,7 +15,7 @@ path = pathlib.Path(sys.argv[2])
 axioms = json.loads(path.read_text()) if path.exists() else {}
 changed = 0
 for diagnostic in result.get("diagnostics", []):
-    match = re.search(r"`[\w.]*\.(\w+)` violates its exact axiom policy: observed \[(.*?)\]", diagnostic["message"])
+    match = re.search(r"`[\w.]*\.(\w+)` violates its w+ axiom policy: observed \[(.*?)\]", diagnostic["message"])
     if match:
         axioms[match.group(1)] = sorted(a.strip() for a in match.group(2).split(",") if a.strip())
         changed += 1
@@ -45,7 +45,7 @@ echo "check exit $?"
 learn_axioms check.json
 cd "$repo" || exit 1
 
-for pass in 1 2 3 4 5 6; do
+for pass in $(seq 1 80); do
   generate
   cd "$project" || exit 1
   start=$(date +%s)
@@ -69,7 +69,7 @@ print(json.dumps({"spec": "lexlean/production-request/1", "roots": [
      "targets": [{"id": "rust-std", "digest": digest}]}]}))
 PY
 cd "$repo" || exit 1
-for pass in 1 2 3 4 5 6; do
+for pass in $(seq 1 80); do
   cd "$project" || exit 1
   start=$(date +%s)
   lexlean --diagnostic-format json production build --request request.json > production.json 2> production.err
