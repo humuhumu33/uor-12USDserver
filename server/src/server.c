@@ -495,9 +495,10 @@ static void check_columns(const char *table, const char *expected) {
  * as dirty memory until the box runs out. Past WAL_GATE_FRAMES writes wait, reads go on, and the log restarts. */
 #define CHECKPOINT_FRAMES 1000
 #define WAL_GATE_NANOSECONDS 1000000000LL
-// At the CPU limit the loop rarely sleeps, and nice 19 left a pass 400-900 ms with writes waiting; nice 10 took about 100 ms.
-// Experiments set these through TRY_GATE_FRAMES and TRY_NICE. Remove before submission.
-static int wal_gate_frames = 4000, wal_inline_frames = 16384, checkpoint_nice = 10;
+#define WAL_GATE_FRAMES 4000
+#define WAL_INLINE_FRAMES 16384
+// At the CPU limit the loop rarely sleeps, and nice 19 left a pass 240-600 ms with writes waiting; nice 10 took about 100 ms.
+#define CHECKPOINT_NICE 10
 static sqlite3 *checkpoint_db;
 static pthread_mutex_t checkpoint_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t checkpoint_cond = PTHREAD_COND_INITIALIZER;
@@ -526,7 +527,7 @@ static int wal_hook(void *arg, sqlite3 *d, const char *name, int frames) {
     wal_frames = frames;
     if ((uint64_t)frames > stat_frames_most) stat_frames_most = (uint64_t)frames;
     __atomic_store_n(&commit_number, commit_number + 1, __ATOMIC_RELEASE);
-    if (frames >= wal_gate_frames && !wal_gate) {
+    if (frames >= WAL_GATE_FRAMES && !wal_gate) {
         wal_gate_since = monotonic_nanoseconds();
         __atomic_store_n(&wal_gate, 1, __ATOMIC_RELEASE);
         stat_gates++;
@@ -542,7 +543,7 @@ static int wal_hook(void *arg, sqlite3 *d, const char *name, int frames) {
 
 static void *checkpoint_main(void *arg) {
     (void)arg;
-    setpriority(PRIO_PROCESS, 0, checkpoint_nice);
+    setpriority(PRIO_PROCESS, 0, CHECKPOINT_NICE);
     for (;;) {
         pthread_mutex_lock(&checkpoint_lock);
         while (!checkpoint_wanted) pthread_cond_wait(&checkpoint_cond, &checkpoint_lock);
@@ -702,8 +703,7 @@ static void one_write_install(void) {
 static void db_open(const char *path) {
     // Only this process opens the file, so no fcntl lock is taken per transaction.
     one_write_install();
-    const char *vfs = getenv("TRY_PLAIN") ? "unix-excl" : "one-write";
-    if (sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, vfs) != SQLITE_OK) die("open the database");
+    if (sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, "one-write") != SQLITE_OK) die("open the database");
     exec("PRAGMA journal_mode = WAL");
     exec("PRAGMA synchronous = NORMAL");
     exec("PRAGMA temp_store = MEMORY");
@@ -733,7 +733,7 @@ static void db_open(const char *path) {
     cur_users = malloc(size);
     cur_time = malloc(size);
     cur_likes = malloc(size);
-    if (sqlite3_open_v2(path, &checkpoint_db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, vfs) != SQLITE_OK) die("open the checkpoint connection");
+    if (sqlite3_open_v2(path, &checkpoint_db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, "one-write") != SQLITE_OK) die("open the checkpoint connection");
     sqlite3_exec(checkpoint_db, "PRAGMA synchronous = NORMAL", 0, 0, 0);
     pthread_t thread;
     if (pthread_create(&thread, 0, checkpoint_main, 0)) die("checkpoint thread");
@@ -1910,7 +1910,7 @@ static void run_batch(void) {
         if (gate_ns > stat_gate_most_ns) stat_gate_most_ns = gate_ns;
         __atomic_store_n(&wal_gate, 0, __ATOMIC_RELEASE);
     }
-    if (UNLIKELY(wal_frames >= wal_inline_frames)) {
+    if (UNLIKELY(wal_frames >= WAL_INLINE_FRAMES)) {
         // Last resort: the checkpoint thread is too far behind for the log to stay in memory.
         sqlite3_wal_checkpoint_v2(db, "main", SQLITE_CHECKPOINT_PASSIVE, NULL, NULL);
         wal_frames = 0;
@@ -2100,11 +2100,6 @@ int main(void) {
     } else {
         lock_code();
     }
-    if (getenv("TRY_GATE_FRAMES")) {
-        wal_gate_frames = atoi(getenv("TRY_GATE_FRAMES"));
-        wal_inline_frames = wal_gate_frames * 4;
-    }
-    if (getenv("TRY_NICE")) checkpoint_nice = atoi(getenv("TRY_NICE"));
     struct rlimit nofile;
     getrlimit(RLIMIT_NOFILE, &nofile);
     nofile.rlim_cur = nofile.rlim_max;
@@ -2136,16 +2131,11 @@ int main(void) {
     struct __kernel_timespec timeout = {.tv_sec = 0, .tv_nsec = WAIT_NANOSECONDS};
     uint64_t next_stats = 0;
     stats_on = getenv("SERVER_STATS") != NULL;
-    int toggle_wake = !getenv("TRY_PLAIN");
     memset(requests, 0, sizeof requests);
     for (;;) {
         struct io_uring_cqe *cqe;
         // A backlog is work already in hand, so there is nothing to wait for.
-        int wait = request_count > request_head ? 0 : WAIT_COMPLETIONS;
-        // The other rings only need to signal the wake-up while the loop is asleep on this one.
-        if (wait && toggle_wake) for (int index = 1; index < ring_count; index++) io_uring_cq_eventfd_toggle(&rings[index].ring, true);
-        io_uring_submit_and_wait_timeout(&rings[0].ring, &cqe, wait, &timeout, NULL);
-        if (wait && toggle_wake) for (int index = 1; index < ring_count; index++) io_uring_cq_eventfd_toggle(&rings[index].ring, false);
+        io_uring_submit_and_wait_timeout(&rings[0].ring, &cqe, request_count > request_head ? 0 : WAIT_COMPLETIONS, &timeout, NULL);
         rings[0].pending_sqes = 0;
         now_seconds = (uint64_t)time(0);
         if (UNLIKELY(stats_on && now_seconds >= next_stats)) {

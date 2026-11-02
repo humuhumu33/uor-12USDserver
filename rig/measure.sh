@@ -34,7 +34,6 @@ sudo ss -Hltnp "sport = :$port" | cut -c1-200
 # CPU_QUOTA emulates a slower CPU, so a server can reach its limit here before it reaches the memory limit.
 quota=()
 [ -n "${CPU_QUOTA:-}" ] && quota=(-p "CPUQuota=$CPU_QUOTA" -p CPUQuotaPeriodSec=5ms)
-[ -n "${TRY_PLAIN:-}" ] && quota+=(--setenv="TRY_PLAIN=1")
 # A transient service, as the organiser's systemd unit runs entries.
 sudo systemd-run --unit="$unit" --collect -p AllowedCPUs=0 "${quota[@]}" -p MemoryMax=1750M -p MemorySwapMax=0 -p LimitNOFILE="$limit" -p LimitCORE=infinity \
   -p AmbientCapabilities=CAP_NET_BIND_SERVICE -p StandardOutput="file:/tmp/$unit.log" -p StandardError="file:/tmp/$unit.log" \
