@@ -31,8 +31,11 @@ for _ in $(seq 1 30); do
   sleep 1
 done
 sudo ss -Hltnp "sport = :$port" | cut -c1-200
+# CPU_QUOTA emulates a slower CPU, so a server can reach its limit here before it reaches the memory limit.
+quota=()
+[ -n "${CPU_QUOTA:-}" ] && quota=(-p "CPUQuota=$CPU_QUOTA" -p CPUQuotaPeriodSec=5ms)
 # A transient service, as the organiser's systemd unit runs entries.
-sudo systemd-run --unit="$unit" --collect -p AllowedCPUs=0 -p MemoryMax=1750M -p MemorySwapMax=0 -p LimitNOFILE="$limit" -p LimitCORE=infinity \
+sudo systemd-run --unit="$unit" --collect -p AllowedCPUs=0 "${quota[@]}" -p MemoryMax=1750M -p MemorySwapMax=0 -p LimitNOFILE="$limit" -p LimitCORE=infinity \
   -p AmbientCapabilities=CAP_NET_BIND_SERVICE -p StandardOutput="file:/tmp/$unit.log" -p StandardError="file:/tmp/$unit.log" \
   --setenv=SQLITE_PATH="$db" --setenv=JWT_SECRET=twelve-dollar-challenge --setenv=HOST=127.0.0.1 --setenv=PORT="$port" \
   --uid="$(id -u)" --gid="$(id -g)" "${command[@]}"

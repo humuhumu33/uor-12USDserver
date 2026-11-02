@@ -378,8 +378,17 @@ int main(int argc, char **argv) {
         }
     }
     double seconds = (now_us() - hold_start) / 1e6;
-    printf("LOAD users=%u hold_s=%.0f connections=%u requests=%lu rps=%.0f errors=%lu error_pct=%.3f refused=%lu p50=%.2f p95=%.2f p99=%.2f p999=%.2f worst10s_p99=%.2f\n",
+    // A request that never answers is in no latency percentile, and k6 would count it as an error.
+    uint32_t stuck = 0;
+    uint64_t oldest = 0, finished = now_us();
+    for (uint32_t i = 0; i < count; i++) {
+        if (users[i].fd < 0 || !users[i].waiting || !users[i].sent_at) continue;
+        uint64_t age = finished - users[i].sent_at;
+        if (age > 5000000) stuck++;
+        if (age > oldest) oldest = age;
+    }
+    printf("LOAD users=%u hold_s=%.0f connections=%u requests=%lu rps=%.0f errors=%lu error_pct=%.3f refused=%lu p50=%.2f p95=%.2f p99=%.2f p999=%.2f worst10s_p99=%.2f stuck=%u oldest_s=%.1f\n",
            count, seconds, open_connections, hold_requests, hold_requests / seconds, hold_errors, hold_requests ? 100.0 * hold_errors / hold_requests : 0, refused,
-           percentile(hold_hist, 0.5), percentile(hold_hist, 0.95), percentile(hold_hist, 0.99), percentile(hold_hist, 0.999), worst_window_p99);
+           percentile(hold_hist, 0.5), percentile(hold_hist, 0.95), percentile(hold_hist, 0.99), percentile(hold_hist, 0.999), worst_window_p99, stuck, oldest / 1e6);
     return 0;
 }
