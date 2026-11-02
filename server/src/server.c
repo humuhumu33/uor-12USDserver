@@ -1,7 +1,7 @@
 // One event-loop thread over io_uring direct descriptors, one SQLite transaction per batch.
 // Compiled as one translation unit with the SQLite amalgamation so reads can use the B-tree layer.
-// The cursor seek and record decoding follow lean-derive-hargup (#153, MIT); the poll-then-read
-// transport and drain-first batching follow lessons published by c-iouring-pavlyhalim (#245, MIT).
+// The cursor seek and record decoding follow lean-derive-hargup (#153, MIT); drain-first batching follows lessons
+// published by c-iouring-pavlyhalim (#245, MIT), and the multishot receive by rust-iouring-kensac (#264).
 #define _GNU_SOURCE
 #include "sqlite3.c"
 #include "core.h"
@@ -39,7 +39,7 @@
 #define WAIT_COMPLETIONS 64
 #define WAIT_NANOSECONDS 2000000
 
-enum { OP_ACCEPT = 1, OP_POLL, OP_RECV, OP_SEND, OP_CLOSE, OP_WAKE, OP_IGNORE };
+enum { OP_ACCEPT = 1, OP_RECV, OP_SEND, OP_CLOSE, OP_WAKE, OP_IGNORE };
 enum { C_FREE, C_OPEN, C_CLOSING };
 enum { K_CONST, K_HEALTH, K_FEED, K_POST, K_LIKE, K_CREATE, K_HELD };
 
@@ -47,6 +47,7 @@ typedef struct {
     uint8_t state;
     uint8_t queued;
     uint8_t close_after;
+    uint8_t armed;
     uint16_t sends;
     uint16_t generation;
     uint32_t spill_len;
@@ -61,7 +62,6 @@ typedef struct {
     Conn *conns;
     uint32_t *read_queue;
     uint32_t queued;
-    uint32_t free_buffers;
     uint32_t table;
     uint32_t open;
     uint32_t pending_sqes;
@@ -510,6 +510,7 @@ static uint64_t stat_gates, stat_gate_timeouts, stat_inline, stat_held_most, sta
 static int stats_on;
 static int64_t stat_gate_ns, stat_gate_most_ns, stat_turn_most_ns, stat_off_cpu_most_ns, stat_off_cpu_ns, stat_commit_most_ns;
 static int64_t stat_pass_most_ns, stat_passes, stat_checkpoint_cpu_ns;
+static uint64_t stat_rearms;
 
 static int64_t monotonic_nanoseconds(void) {
     struct timespec t;
@@ -1519,7 +1520,6 @@ static int ring_setup(int index) {
     memset(ring->memory, 0, BUFFER_COUNT * BUFFER_SIZE);
     for (int i = 0; i < BUFFER_COUNT; i++) io_uring_buf_ring_add(ring->buffers, ring->memory + i * BUFFER_SIZE, BUFFER_SIZE, (unsigned short)i, BUFFER_COUNT - 1, i);
     io_uring_buf_ring_advance(ring->buffers, BUFFER_COUNT);
-    ring->free_buffers = BUFFER_COUNT;
     ring->table = table_size;
     ring->ready = 1;
     return 0;
@@ -1546,12 +1546,16 @@ static void stop_accepts(int index) {
     ring->accepting = 0;
 }
 
-static void arm_poll(int index, uint32_t slot) {
+// A completion carries the slot's generation, because it can arrive after the slot has a new connection.
+static void arm_recv(int index, uint32_t slot) {
     Ring *ring = &rings[index];
+    Conn *c = &ring->conns[slot];
     struct io_uring_sqe *s = next_sqe(ring);
-    io_uring_prep_poll_multishot(s, (int)slot, POLLIN | POLLRDHUP);
-    s->flags |= IOSQE_FIXED_FILE;
-    io_uring_sqe_set_data64(s, encode(OP_POLL, index, 0, slot));
+    io_uring_prep_recv_multishot(s, (int)slot, NULL, 0, 0);
+    s->flags |= IOSQE_FIXED_FILE | IOSQE_BUFFER_SELECT;
+    s->buf_group = BUFFER_GROUP;
+    io_uring_sqe_set_data64(s, encode(OP_RECV, index, c->generation, slot));
+    c->armed = 1;
 }
 
 static void close_conn(int index, uint32_t slot) {
@@ -1564,11 +1568,8 @@ static void close_conn(int index, uint32_t slot) {
         c->spill = NULL;
         c->spill_len = 0;
     }
+    // The shutdown ends the armed receive, which would otherwise keep the socket alive after its slot is closed.
     struct io_uring_sqe *s = next_sqe(ring);
-    io_uring_prep_poll_remove(s, encode(OP_POLL, index, 0, slot));
-    s->flags |= IOSQE_CQE_SKIP_SUCCESS | IOSQE_IO_LINK;
-    io_uring_sqe_set_data64(s, encode(OP_IGNORE, index, 0, 0));
-    s = next_sqe(ring);
     io_uring_prep_shutdown(s, (int)slot, SHUT_RDWR);
     s->flags |= IOSQE_FIXED_FILE | IOSQE_CQE_SKIP_SUCCESS | IOSQE_IO_LINK | IOSQE_IO_HARDLINK;
     io_uring_sqe_set_data64(s, encode(OP_IGNORE, index, 0, 0));
@@ -1581,7 +1582,6 @@ static void return_buffer(int index, uint16_t id) {
     Ring *ring = &rings[index];
     io_uring_buf_ring_add(ring->buffers, ring->memory + (size_t)id * BUFFER_SIZE, BUFFER_SIZE, id, BUFFER_COUNT - 1, 0);
     io_uring_buf_ring_advance(ring->buffers, 1);
-    ring->free_buffers++;
 }
 
 static void queue_read(int index, uint32_t slot) {
@@ -1592,27 +1592,27 @@ static void queue_read(int index, uint32_t slot) {
     ring->read_queue[ring->queued++] = slot;
 }
 
-// Reads what is waiting as soon as it is known to be waiting, up to the free buffers.
+static void take_bytes(int index, uint32_t slot, const char *data, uint32_t n, int buffer);
+
+// Re-arms the receives that ended, mostly because the buffers ran out after a stall. A receive armed on a socket with
+// data waiting takes a buffer at once, so half the buffers at a time: past that, each re-arm would only end again.
 static int issue_reads(void) {
     int issued = 0;
-    // Reads already in flight can overfill the queue, and take_bytes runs a batch when they do.
-    uint32_t room = MAX_REQUESTS - (request_count - request_head);
     for (int index = 0; index < ring_count; index++) {
         Ring *ring = &rings[index];
-        uint32_t n = ring->queued < ring->free_buffers ? ring->queued : ring->free_buffers;
-        if (n > room) n = room;
-        room -= n;
+        uint32_t n = ring->queued < BUFFER_COUNT / 2 ? ring->queued : BUFFER_COUNT / 2;
         for (uint32_t i = 0; i < n; i++) {
             uint32_t slot = ring->read_queue[i];
-            ring->conns[slot].queued = 0;
-            struct io_uring_sqe *s = next_sqe(ring);
-            io_uring_prep_recv(s, (int)slot, NULL, BUFFER_SIZE, MSG_DONTWAIT);
-            s->flags |= IOSQE_FIXED_FILE | IOSQE_BUFFER_SELECT;
-            s->buf_group = BUFFER_GROUP;
-            io_uring_sqe_set_data64(s, encode(OP_RECV, index, 0, slot));
-            issued++;
+            Conn *c = &ring->conns[slot];
+            c->queued = 0;
+            if (c->state != C_OPEN) continue;
+            if (!c->armed) {
+                arm_recv(index, slot);
+                issued++;
+            }
+            // Bytes left in a spill when the queue was full wait for no new read.
+            if (c->spill) take_bytes(index, slot, (const char *)ring->memory, 0, -1);
         }
-        ring->free_buffers -= n;
         if (n < ring->queued) memmove(ring->read_queue, ring->read_queue + n, (ring->queued - n) * sizeof(uint32_t));
         ring->queued -= n;
     }
@@ -1637,7 +1637,7 @@ static void on_accept(int index, struct io_uring_cqe *cqe) {
         uint32_t slot = (uint32_t)cqe->res;
         ring->conns[slot].state = C_OPEN;
         ring->open++;
-        arm_poll(index, slot);
+        arm_recv(index, slot);
         if (index == active_ring && ring->open + 8192 >= ring->table && active_ring + 1 < MAX_RINGS && !out_of_rings) {
             if (rings[active_ring + 1].ready || ring_setup(active_ring + 1) == 0) {
                 if (ring_count < active_ring + 2) ring_count = active_ring + 2;
@@ -1721,7 +1721,7 @@ static void take_bytes(int index, uint32_t slot, const char *data, uint32_t n, i
         c->spill_len = 0;
     }
     if (buffer >= 0) return_buffer(index, (uint16_t)buffer);
-    if (((n == BUFFER_SIZE) && buffer >= 0) || stranded) queue_read(index, slot);
+    if (stranded) queue_read(index, slot);
 }
 
 static int drain_ring(int index) {
@@ -1739,24 +1739,30 @@ static int drain_ring(int index) {
         case OP_ACCEPT:
             on_accept(index, cqe);
             break;
-        case OP_POLL:
-            if (c->state == C_OPEN) {
-                if (cqe->res > 0) queue_read(index, slot);
-                if (!(cqe->flags & IORING_CQE_F_MORE) && cqe->res != -ECANCELED && cqe->res != -ENOENT) arm_poll(index, slot);
+        case OP_RECV: {
+            int has_buffer = (cqe->flags & IORING_CQE_F_BUFFER) != 0;
+            uint16_t id = (uint16_t)(cqe->flags >> IORING_CQE_BUFFER_SHIFT);
+            // From a connection this slot no longer holds.
+            if (c->state != C_OPEN || (uint8_t)arena != (uint8_t)c->generation) {
+                if (has_buffer) return_buffer(index, id);
+                break;
             }
-            break;
-        case OP_RECV:
-            if (cqe->res > 0) {
-                unsigned id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
+            int ended = !(cqe->flags & IORING_CQE_F_MORE);
+            if (ended) c->armed = 0;
+            if (cqe->res > 0 && has_buffer) {
                 take_bytes(index, slot, (const char *)ring->memory + (size_t)id * BUFFER_SIZE, (uint32_t)cqe->res, (int)id);
+                if (ended) queue_read(index, slot);
             } else {
-                if (cqe->flags & IORING_CQE_F_BUFFER) return_buffer(index, (uint16_t)(cqe->flags >> IORING_CQE_BUFFER_SHIFT));
-                else ring->free_buffers++;
-                if (cqe->res == 0 || (cqe->res != -EAGAIN && cqe->res != -ENOBUFS)) close_conn(index, slot);
-                else if (cqe->res == -ENOBUFS) queue_read(index, slot);
-                else if (c->spill) take_bytes(index, slot, (const char *)ring->memory, 0, -1);
+                if (has_buffer) return_buffer(index, id);
+                if (cqe->res == -ENOBUFS || cqe->res == -EAGAIN) {
+                    stat_rearms++;
+                    queue_read(index, slot);
+                } else {
+                    close_conn(index, slot);
+                }
             }
             break;
+        }
         case OP_SEND:
             if (arena >= 0) arenas[arena].pending--;
             if (c->sends) c->sends--;
@@ -1768,6 +1774,7 @@ static int drain_ring(int index) {
             c->close_after = 0;
             c->sends = 0;
             c->held = 0;
+            c->armed = 0;
             c->generation++;
             if (ring->open) ring->open--;
             break;
@@ -2152,8 +2159,8 @@ int main(void) {
         now_seconds = (uint64_t)time(0);
         if (UNLIKELY(stats_on && now_seconds >= next_stats)) {
             next_stats = now_seconds + 10;
-            fprintf(stderr, "STATS gates=%lu gate_timeouts=%lu inline=%lu frames_most=%lu queue_most=%lu held_most=%lu rings=%d gate_ms=%ld gate_most_ms=%ld turn_most_ms=%ld off_cpu_ms=%ld off_cpu_most_ms=%ld commit_most_ms=%ld passes=%ld pass_most_ms=%ld checkpoint_cpu_ms=%ld\n",
-                stat_gates, stat_gate_timeouts, stat_inline, stat_frames_most, stat_queue_most, stat_held_most, ring_count,
+            fprintf(stderr, "STATS gates=%lu gate_timeouts=%lu inline=%lu frames_most=%lu queue_most=%lu held_most=%lu rings=%d rearms=%lu gate_ms=%ld gate_most_ms=%ld turn_most_ms=%ld off_cpu_ms=%ld off_cpu_most_ms=%ld commit_most_ms=%ld passes=%ld pass_most_ms=%ld checkpoint_cpu_ms=%ld\n",
+                stat_gates, stat_gate_timeouts, stat_inline, stat_frames_most, stat_queue_most, stat_held_most, ring_count, stat_rearms,
                 stat_gate_ns / 1000000, stat_gate_most_ns / 1000000, stat_turn_most_ns / 1000000, stat_off_cpu_ns / 1000000, stat_off_cpu_most_ns / 1000000, stat_commit_most_ns / 1000000,
                 (long)__atomic_load_n(&stat_passes, __ATOMIC_RELAXED), (long)__atomic_load_n(&stat_pass_most_ns, __ATOMIC_RELAXED) / 1000000, (long)__atomic_load_n(&stat_checkpoint_cpu_ns, __ATOMIC_RELAXED) / 1000000);
             stat_frames_most = stat_queue_most = stat_held_most = 0;

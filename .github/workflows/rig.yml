@@ -8,7 +8,7 @@ permissions:
   contents: read
 env:
   CHALLENGE_COMMIT: c7764b60
-  BEFORE_COMMIT: 31062c29b142a02c0cbda152b5a82b4aeaf2b818
+  BEFORE_COMMIT: e3e97f72051fe443ac3cdea9f743b23906f0c15d
 jobs:
   measure:
     # One job, so every server shares a machine. Runners differ between jobs.
@@ -60,7 +60,7 @@ jobs:
           cp -r server/. "$RUNNER_TEMP/challenge/submissions/ours-under-test/"
           cd "$RUNNER_TEMP/challenge"
           bash test/run.sh submissions/ours-under-test 2>&1 | tail -40
-      - name: Build the server as it was before the tables
+      - name: Build the server as it was before the multishot receive
         timeout-minutes: 10
         shell: bash
         run: |
@@ -82,7 +82,7 @@ jobs:
           # Near the limit, interleaved so drift on this machine hits both servers.
           # 73%: the quota at which the control spends the same share here at 295k as on the box (59% against 81%).
           export CPU_QUOTA=73%
-          for run in "before 310000" "ours 310000" "control 310000" "before 310000" "ours 310000" "control 310000" "before 310000" "ours 310000"; do
+          for run in "before 310000" "ours 310000" "before 310000" "ours 310000" "before 310000" "ours 310000" "before 360000" "ours 360000"; do
             read -r server users <<< "$run"
             echo "=== $server at $users users"
             bash rig/measure.sh "$server" "$users" 90 150 "$RUNNER_TEMP/challenge" "$PWD/rig"
