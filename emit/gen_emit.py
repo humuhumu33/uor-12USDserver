@@ -51,7 +51,9 @@ def exhaust(variables, definitions):
         return "simplify{definitions: [" + ", ".join(definitions) + "]}"
     name, constructors = variables[0]
     branches = [
-        "{proof: " + exhaust(variables[1:], definitions) + ", binders: [], constructor: " + c + "}" for c in constructors
+        # The notation reads a bare true or false as a boolean, and a constructor must be a name.
+        "{proof: " + exhaust(variables[1:], definitions) + ", binders: [], constructor: " + (f'"{c}"' if c in ("true", "false") else c) + "}"
+        for c in constructors
     ]
     return "induction{branches: [" + ", ".join(branches) + "], scrutinee: " + name + "}"
 
