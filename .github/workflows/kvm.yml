@@ -72,7 +72,7 @@ jobs:
         run: |
           sudo prlimit --pid $$ --nofile=1048576:1048576
           # Two minutes held, as the organiser's probe is. Ours and the control alternate so drift hits both.
-          for run in "ours 250000" "control 250000" "ours 300000" "control 300000" "ours 320000" "control 320000" "ours 340000" "control 340000"; do
+          for run in "ours 300000" "control 300000" "ours 320000" "control 320000" "ours 280000" "control 280000" "ours 310000" "control 310000"; do
             read -r server users <<< "$run"
             echo "=== $server at $users users"
             bash rig/kvm/measure.sh "$RUNNER_TEMP/guest" "$server" "$users" 60 120 "$PWD/rig/loadgen" "$RUNNER_TEMP/challenge/tokens.txt"

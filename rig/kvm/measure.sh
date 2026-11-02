@@ -8,9 +8,17 @@ SSH=(ssh -i "$work/key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/n
 unit="srv-$entry-$users"
 cgroup="/sys/fs/cgroup/system.slice/$unit.service"
 
+# A fresh boot for each step: an out-of-memory kill in one run leaves the guest unfit for the next.
+"${SSH[@]}" "sudo reboot" 2> /dev/null
+sleep 15
+for _ in $(seq 1 60); do
+  "${SSH[@]}" true 2> /dev/null && break
+  sleep 3
+done
+"${SSH[@]}" "cat /proc/sys/net/ipv4/tcp_mem | sed 's/^/TCP_MEM /'; free -m | awk '/Mem:/ {print \"BOOTED used_mb=\" \$3 \" available_mb=\" \$7}'"
 "${SSH[@]}" "rm -f feed-run.db*; cp feed.db feed-run.db; sudo sysctl -q -w vm.drop_caches=3; sudo systemd-run --quiet --unit=$unit --collect \
   -p LimitNOFILE=65535 -p AmbientCapabilities=CAP_NET_BIND_SERVICE -p StandardOutput=file:/tmp/$unit.log -p StandardError=file:/tmp/$unit.log \
-  --uid=deploy --gid=deploy --setenv=SQLITE_PATH=\$HOME/feed-run.db --setenv=JWT_SECRET=twelve-dollar-challenge --setenv=HOST=0.0.0.0 --setenv=PORT=80 \
+  --uid=deploy --gid=deploy --setenv=SQLITE_PATH=\$HOME/feed-run.db --setenv=JWT_SECRET=twelve-dollar-challenge --setenv=HOST=0.0.0.0 --setenv=PORT=80 --setenv=SERVER_STATS=1 \
   /bin/bash \$HOME/entries/$entry/start.sh"
 for _ in $(seq 1 60); do
   curl -s -o /dev/null --max-time 2 "http://$GUEST/health" && break
@@ -22,7 +30,7 @@ curl -s -o /dev/null --max-time 2 "http://$GUEST/health" || { echo "SERVER did n
 
 # The guest keeps its own memory record, since it has to be read back after any failure.
 "${SSH[@]}" "nohup sh -c 'while sleep 2; do
-  echo \"\$(date +%s) avail_mb=\$(awk \"/MemAvailable/ {print int(\\\$2/1024)}\" /proc/meminfo) tcp_mem_pages=\$(awk \"/^TCP:/ {print \\\$NF}\" /proc/net/sockstat) service_mb=\$(( \$(cat $cgroup/memory.current 2>/dev/null || echo 0) / 1048576 )) active=\$(systemctl is-active $unit)\"
+  echo \"\$(date +%s) avail_mb=\$(awk \"/MemAvailable/ {print int(\\\$2/1024)}\" /proc/meminfo) tcp_mem_pages=\$(awk \"/^TCP:/ {print \\\$NF}\" /proc/net/sockstat) service_mb=\$(( \$(cat $cgroup/memory.current 2>/dev/null || echo 0) / 1048576 )) slab_mb=\$(awk \"/^Slab:/ {print int(\\\$2/1024)}\" /proc/meminfo) cached_mb=\$(awk \"/^Cached:/ {print int(\\\$2/1024)}\" /proc/meminfo) dirty_mb=\$(awk \"/^Dirty:/ {print int(\\\$2/1024)}\" /proc/meminfo) active=\$(systemctl is-active $unit)\"
 done' > /tmp/samples-$unit.log 2>&1 < /dev/null &"
 
 LOAD_TARGET="$GUEST" LOAD_SOURCE=10.77.1.0 taskset -c 2,3 "$loadgen" 80 "$users" "$ramp" "$hold" "$tokens" > "$work/load-$unit.log" 2>&1 &
@@ -38,8 +46,10 @@ wait "$load"
 
 line=$(grep LOAD "$work/load-$unit.log" | tail -1)
 echo "$line"
-grep -E 'WINDOW' "$work/load-$unit.log" | tail -4 | cut -c1-140
+grep -E 'WINDOW' "$work/load-$unit.log" | cut -c1-120 | sed -E 's/requests=/r=/; s/connections=/c=/'
 requests=$(echo "$line" | sed -E 's/.* requests=([0-9]+).*/\1/')
+# Memory over time, every 10 s, so a kill shows what filled it. Read before anything else can disturb the guest.
+"${SSH[@]}" "awk 'NR % 5 == 0' /tmp/samples-$unit.log | cut -d' ' -f2- | sed 's/^/MEM /'; grep -E 'STATS' /tmp/$unit.log | awk 'NR % 3 == 0' | sed -E 's/inline=[0-9]+ //; s/rings=[0-9]+ //; s/passes=.*//' | cut -c1-200"
 "${SSH[@]}" "grep STATS /tmp/$unit.log | tail -2 | cut -c1-300; sudo dmesg | grep -iE 'out of memory|oom-kill|tcp: out of|tcp: too many' | tail -4 | cut -c1-160; systemctl is-active $unit || true; awk 'BEGIN {low=99999; t=0} {split(\$2,a,\"=\"); if (a[2]+0<low) low=a[2]+0; split(\$3,b,\"=\"); if (b[2]+0>t) t=b[2]+0} END {print \"GUEST lowest_avail_mb=\" low \" most_tcp_mem_pages=\" t}' /tmp/samples-$unit.log; pkill -f 'while sleep 2' || true"
 python3 - "$entry" "$users" "$hold" "${start:-0}" "${stop:-0}" "${requests:-0}" "${peak:-0}" "${load_start:-0}" "${load_stop:-0}" <<'PY'
 import sys
