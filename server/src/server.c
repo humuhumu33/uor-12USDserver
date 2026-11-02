@@ -66,6 +66,7 @@ typedef struct {
     uint8_t *data;
     uint32_t pending;
     uint32_t used;
+    uint64_t batch;
 } Arena;
 
 typedef struct {
@@ -1427,6 +1428,8 @@ static void on_accept(int index, struct io_uring_cqe *cqe) {
     }
 }
 
+static void run_batch(void);
+
 static void take_bytes(int index, uint32_t slot, const char *data, uint32_t n, int buffer) {
     Ring *ring = &rings[index];
     Conn *c = &ring->conns[slot];
@@ -1444,8 +1447,16 @@ static void take_bytes(int index, uint32_t slot, const char *data, uint32_t n, i
         have = c->spill_len;
     }
     uint32_t at = 0;
-    int kept_buffer = 0;
-    while (at < have && request_count < MAX_REQUESTS) {
+    int kept_buffer = 0, stranded = 0;
+    while (at < have) {
+        // Bytes left in a spill wait for the next read, which never comes if the client is waiting too.
+        if (UNLIKELY(request_count == MAX_REQUESTS)) {
+            run_batch();
+            if (request_count == MAX_REQUESTS) {
+                stranded = 1;
+                break;
+            }
+        }
         Request *r = &requests[request_count];
         memset(r, 0, sizeof *r);
         uint32_t used = parse_request(r, view + at, have - at);
@@ -1474,7 +1485,7 @@ static void take_bytes(int index, uint32_t slot, const char *data, uint32_t n, i
         c->spill_len = 0;
     }
     if (buffer >= 0) return_buffer(index, (uint16_t)buffer);
-    if ((n == BUFFER_SIZE) && buffer >= 0) queue_read(index, slot);
+    if (((n == BUFFER_SIZE) && buffer >= 0) || stranded) queue_read(index, slot);
 }
 
 static int drain_ring(int index) {
@@ -1507,6 +1518,7 @@ static int drain_ring(int index) {
                 else ring->free_buffers++;
                 if (cqe->res == 0 || (cqe->res != -EAGAIN && cqe->res != -ENOBUFS)) close_conn(index, slot);
                 else if (cqe->res == -ENOBUFS) queue_read(index, slot);
+                else if (c->spill) take_bytes(index, slot, (const char *)ring->memory, 0, -1);
             }
             break;
         case OP_SEND:
@@ -1529,20 +1541,31 @@ static int drain_ring(int index) {
     return (int)seen;
 }
 
-static void choose_arena(void) {
+static uint64_t batch_number;
+
+// pending only counts sends already prepared, so an arena filled earlier in this batch looks free unless marked.
+static int choose_arena(void) {
     if (arenas[current_arena].used + RESPONSE_RESERVE * 2 < ARENA_SIZE) {
         response_at = (char *)arenas[current_arena].data + arenas[current_arena].used;
-        return;
+        arenas[current_arena].batch = batch_number;
+        return 1;
     }
     for (int i = 1; i <= ARENAS; i++) {
         int next = (current_arena + i) % ARENAS;
-        if (arenas[next].pending == 0) {
+        if (arenas[next].pending == 0 && arenas[next].batch != batch_number) {
             current_arena = next;
             arenas[next].used = 0;
+            arenas[next].batch = batch_number;
             response_at = (char *)arenas[next].data;
-            return;
+            return 1;
         }
     }
+    return 0;
+}
+
+static int response_room(void) {
+    if (LIKELY((char *)arenas[current_arena].data + ARENA_SIZE - response_at >= RESPONSE_RESERVE)) return 1;
+    return choose_arena();
 }
 
 static void prepare_send(Request *r) {
@@ -1559,13 +1582,19 @@ static void prepare_send(Request *r) {
 }
 
 // One SQLite transaction: reads from the batch's snapshot, then writes, then COMMIT, then every response.
+// When response memory runs out, the requests past that point wait for the next batch, in order.
 static void run_batch(void) {
     if (!request_count) return;
-    choose_arena();
+    batch_number++;
+    if (!choose_arena()) return;
     int database_failed = 0;
-    for (uint32_t i = 0; i < request_count; i++) {
+    uint32_t limit = request_count;
+    for (uint32_t i = 0; i < limit; i++) {
         Request *r = &requests[i];
-        if ((char *)arenas[current_arena].data + ARENA_SIZE - response_at < RESPONSE_RESERVE) choose_arena();
+        if (UNLIKELY(!response_room())) {
+            limit = i;
+            break;
+        }
         int rc = 0;
         switch (r->kind) {
         case K_FEED: rc = run_feed(r); break;
@@ -1575,9 +1604,12 @@ static void run_batch(void) {
         }
         if (rc) respond_error(r, E_INTERNAL);
     }
-    for (uint32_t i = 0; i < request_count; i++) {
+    for (uint32_t i = 0; i < limit; i++) {
         Request *r = &requests[i];
-        if ((char *)arenas[current_arena].data + ARENA_SIZE - response_at < RESPONSE_RESERVE) choose_arena();
+        if (UNLIKELY(!response_room())) {
+            limit = i;
+            break;
+        }
         int rc = 0;
         switch (r->kind) {
         case K_CREATE: rc = run_create(r); break;
@@ -1590,13 +1622,14 @@ static void run_batch(void) {
         }
     }
     if (batch_end()) database_failed = 1;
-    for (uint32_t i = 0; i < request_count; i++) {
+    for (uint32_t i = 0; i < limit; i++) {
         Request *r = &requests[i];
         if (database_failed && r->kind != K_CONST) respond_error(r, E_INTERNAL);
         prepare_send(r);
     }
-    request_count = 0;
-    scratch_used = 0;
+    request_count -= limit;
+    if (request_count) memmove(requests, requests + limit, request_count * sizeof(Request));
+    else scratch_used = 0;
     submit_all();
 }
 

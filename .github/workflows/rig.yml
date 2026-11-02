@@ -12,7 +12,7 @@ jobs:
   measure:
     # One job, so every server shares a machine. Runners differ between jobs.
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
@@ -25,8 +25,9 @@ jobs:
           nproc
           free -m | head -2
           sudo apt-get update -qq
-          sudo apt-get install -y -qq liburing-dev sqlite3 jq build-essential linux-tools-common "linux-tools-$(uname -r)" > /dev/null || sudo apt-get install -y -qq liburing-dev sqlite3 jq build-essential > /dev/null
+          sudo apt-get install -y -qq liburing-dev sqlite3 jq gdb build-essential linux-tools-common "linux-tools-$(uname -r)" > /dev/null || sudo apt-get install -y -qq liburing-dev sqlite3 jq gdb build-essential > /dev/null
           sudo sysctl -q -w kernel.perf_event_paranoid=-1 kernel.kptr_restrict=0
+          sudo sysctl -q -w kernel.core_pattern=/tmp/core.%e.%p fs.suid_dumpable=2
           sudo sysctl -q -w fs.nr_open=2097152 net.ipv4.ip_local_port_range="1024 65000"
           # The box has no conntrack table, and this runner's Docker rules would add one.
           sudo iptables -t raw -A PREROUTING -i lo -j NOTRACK

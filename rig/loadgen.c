@@ -31,6 +31,7 @@ typedef struct {
     uint64_t sent_at;
     uint8_t step;
     uint8_t waiting;
+    uint8_t on_wheel;
 } User;
 
 static User *users;
@@ -62,6 +63,9 @@ static double uniform(double lo, double hi) {
 }
 
 static void schedule(uint32_t id, double seconds) {
+    // A dropped connection can reach a user who is already thinking; twice on the wheel makes a cycle.
+    if (users[id].on_wheel) return;
+    users[id].on_wheel = 1;
     uint64_t slots = (uint64_t)(seconds * 1000 / SLOT_MS) + 1;
     uint32_t slot = (wheel_at + slots) % SLOTS;
     users[id].next = wheel[slot];
@@ -334,6 +338,7 @@ int main(int argc, char **argv) {
             wheel[s] = NONE;
             while (id != NONE) {
                 uint32_t following = users[id].next;
+                users[id].on_wheel = 0;
                 on_due(id);
                 id = following;
             }

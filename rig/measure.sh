@@ -26,7 +26,7 @@ else
   limit=65535
 fi
 # A transient service, as the organiser's systemd unit runs entries.
-sudo systemd-run --unit="$unit" --collect -p AllowedCPUs=0 -p MemoryMax=1750M -p MemorySwapMax=0 -p LimitNOFILE="$limit" \
+sudo systemd-run --unit="$unit" --collect -p AllowedCPUs=0 -p MemoryMax=1750M -p MemorySwapMax=0 -p LimitNOFILE="$limit" -p LimitCORE=infinity \
   -p AmbientCapabilities=CAP_NET_BIND_SERVICE -p StandardOutput="file:/tmp/$unit.log" -p StandardError="file:/tmp/$unit.log" \
   --setenv=SQLITE_PATH="$db" --setenv=JWT_SECRET=twelve-dollar-challenge --setenv=HOST=127.0.0.1 --setenv=PORT="$port" \
   --uid="$(id -u)" --gid="$(id -g)" "${command[@]}"
@@ -48,16 +48,43 @@ if [ ! -f "$cgroup/cpu.stat" ] || ! curl -s -o /dev/null --max-time 2 "http://12
   sysctl kernel.io_uring_disabled 2>&1
   exit 1
 fi
+died() {
+  echo "SERVER DIED $unit at users=$users ($1)"
+  tail -20 "/tmp/$unit.log"
+  sudo journalctl -u "$unit.service" -n 15 --no-pager 2>&1 | cut -c1-200
+  sudo dmesg | grep -iE 'segfault|general protection|out of memory|oom-kill|killed process|tcp: out of' | tail -8 | cut -c1-240
+  for core in /tmp/core.*; do
+    [ -f "$core" ] || continue
+    gdb -q -batch -ex 'bt 12' -ex 'info locals' "$rig/../server/bin/server" "$core" 2>&1 | tail -40 | cut -c1-200
+    rm -f "$core"
+  done
+  grep -E 'WINDOW' "/tmp/load-$unit.log" | tail -4
+  pkill -f "$rig/loadgen" 2> /dev/null
+  wait "$load" 2> /dev/null
+  sudo systemctl stop "$unit.service" 2> /dev/null
+  exit 0
+}
+memory_breakdown() {
+  awk '$1 ~ /^(anon|file|kernel|kernel_stack|pagetables|percpu|sock|slab)$/ {printf "%s=%.0fMB ", $1, $2 / 1048576}' "$cgroup/memory.stat"
+  echo
+}
 taskset -c 1-3 "$rig/loadgen" "$port" "$users" "$ramp" "$hold" "$challenge/tokens.txt" > "/tmp/load-$unit.log" 2>&1 &
 load=$!
-sleep "$ramp"
+for _ in $(seq 1 "$ramp"); do
+  sleep 1
+  [ -f "$cgroup/cpu.stat" ] || died "during the ramp"
+done
 usage_start=$(awk '/usage_usec/ {print $2}' "$cgroup/cpu.stat")
 if [ "${PROFILE:-0}" = 1 ] && command -v perf > /dev/null; then
   # All of the server's threads over the middle of the hold.
   pid=$(head -1 "$cgroup/cgroup.procs")
   (sleep 20; sudo perf record -q -F 1999 -g -p "$pid" -o "/tmp/perf-$unit.data" -- sleep 30 > /dev/null 2>&1) &
 fi
-sleep "$hold"
+for _ in $(seq 1 "$hold"); do
+  sleep 1
+  [ -f "$cgroup/cpu.stat" ] || died "during the hold"
+done
+echo "MEMORY $(memory_breakdown)"
 usage_end=$(awk '/usage_usec/ {print $2}' "$cgroup/cpu.stat")
 peak=$(cat "$cgroup/memory.peak")
 current=$(cat "$cgroup/memory.current")
