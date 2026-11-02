@@ -35,7 +35,10 @@ for x in d.get("diagnostics", []):
 print("artifacts", json.dumps(d.get("artifacts"))[:500])
 PY
 tail -c 600 production.err
-[ "$code" = 0 ] || exit 0
+if [ "$code" != 0 ]; then
+  lexlean explain LLV7006 2>&1 | head -30 | cut -c1-300 | sed 's/^/EXPLAIN /'
+  exit 0
+fi
 pkg=$(cd "$(find . -type d -name kern_emit | head -1)" && pwd)
 wc -c "$pkg/src/lib.rs"
 mkdir -p host/src

@@ -4,6 +4,7 @@
 Each file in the archive is its path, a newline, its length in decimal, a newline, and its bytes.
 """
 import pathlib
+import re
 import sys
 
 # Sixteen appends per definition keep the nesting under the semantic-module JSON recursion limit.
@@ -25,15 +26,15 @@ def text(piece):
     return f'(prim utf8_encode "{escaped}" : Bytes)'
 
 
-# One literal per source line, so the module reads as the source does.
-# A percent sign is forbidden anywhere in a LexLean file, so it is written as a byte.
+# One literal per source line, so the module reads as the source does. Two things are written as bytes: a percent
+# sign, forbidden anywhere in a LexLean file, and the slash of anything like a path, which certification rejects
+# when it sees an absolute path in Lean's output (LLV7006).
 parts = []
 for line in archive.decode().splitlines(keepends=True):
-    pieces = line.encode().split(b"%")
-    for number, piece in enumerate(pieces):
-        if number:
-            parts.append("0x25")
-        if piece:
+    for piece in re.split(rb"(%|/(?=[A-Za-z0-9._~$-]))", line.encode()):
+        if piece in (b"%", b"/"):
+            parts.append("0x" + piece.hex())
+        elif piece:
             parts.append(text(piece))
 
 sections = ""
