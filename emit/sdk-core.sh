@@ -38,18 +38,6 @@ generate() {
   (cd "$project" && lexlean lock > /dev/null)
 }
 
-# Which proof forms exist? The parser lists them when it meets an unknown one.
-PROOF_FORMS="$repo/emit/work-forms"
-rm -rf "$PROOF_FORMS"
-python3 emit/gen_emit.py --core-only server "$PROOF_FORMS" > /dev/null
-python3 - "$PROOF_FORMS/src/Emit.lex.tex" <<'PY'
-import re, sys
-path = sys.argv[1]
-s = open(path).read()
-s = s.replace("proof: simplify{definitions: [routeOf]}", "proof: bogus{}", 1)
-open(path, "w", newline="\n").write(s)
-PY
-(cd "$PROOF_FORMS" && lexlean lock > /dev/null; lexlean --diagnostic-format json check 2>&1 | python3 -c 'import json,sys; [print("FORMS", d["message"][:1500]) for d in json.load(sys.stdin)["diagnostics"][:1]]')
 generate
 cd "$project" || exit 1
 lexlean --diagnostic-format json check > check.json 2>&1

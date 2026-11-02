@@ -48,6 +48,9 @@ def literals(data):
 def exhaust(variables, definitions):
     """Case analysis on every value of the listed finite variables, each case closed by unfolding the definitions."""
     if not variables:
+        if not definitions:
+            # Lean rejects a definition a simplification leaves unused, so a check that stops early is computed instead.
+            return "reflexivity{}"
         return "simplify{definitions: [" + ", ".join(sorted(definitions)) + "]}"
     name, constructors = variables[0]
     branches = [
@@ -60,7 +63,7 @@ def exhaust(variables, definitions):
 
 def expand_exhaust(match):
     groups = match.group(1).split(";")
-    definitions = groups[-1].split(",")
+    definitions = [d for d in groups[-1].split(",") if d]
     variables = []
     for group in groups[:-1]:
         if group:

@@ -165,7 +165,7 @@ theorem{
   name: committing_follows_commit,
   parameters: [phase : Phase, event : Event],
   statement: ((committingFollowsCommit phase event) = true),
-  proof: EXHAUST(phase:idle,reading,committing;event:request,batchEnd,commitOk,commitFail;actionOf,checkCommitting,committingFollowsCommit,nextPhase)
+  proof: EXHAUST(phase:idle,reading,committing;event:request,batchEnd,commitOk,commitFail;)
 }
 
 inductive{
@@ -516,42 +516,42 @@ theorem{
   name: a_quote_is_escaped,
   parameters: [],
   statement: ((escapeClass (34 : UInt8)) = (ctor EscapeClass.backslash)),
-  proof: simplify{definitions: [escapeClass]}
+  proof: reflexivity{}
 }
 
 theorem{
   name: a_backslash_is_escaped,
   parameters: [],
   statement: ((escapeClass (92 : UInt8)) = (ctor EscapeClass.backslash)),
-  proof: simplify{definitions: [escapeClass]}
+  proof: reflexivity{}
 }
 
 theorem{
   name: the_first_control_byte_is_escaped,
   parameters: [],
   statement: ((escapeClass (0 : UInt8)) = (ctor EscapeClass.unicode)),
-  proof: simplify{definitions: [escapeClass]}
+  proof: reflexivity{}
 }
 
 theorem{
   name: the_last_control_byte_is_escaped,
   parameters: [],
   statement: ((escapeClass (31 : UInt8)) = (ctor EscapeClass.unicode)),
-  proof: simplify{definitions: [escapeClass]}
+  proof: reflexivity{}
 }
 
 theorem{
   name: a_space_is_plain,
   parameters: [],
   statement: ((escapeClass (32 : UInt8)) = (ctor EscapeClass.plain)),
-  proof: simplify{definitions: [escapeClass]}
+  proof: reflexivity{}
 }
 
 theorem{
   name: the_top_byte_is_plain,
   parameters: [],
   statement: ((escapeClass (255 : UInt8)) = (ctor EscapeClass.plain)),
-  proof: simplify{definitions: [escapeClass]}
+  proof: reflexivity{}
 }
 
 definition{
