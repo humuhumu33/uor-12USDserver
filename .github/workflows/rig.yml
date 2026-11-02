@@ -60,25 +60,6 @@ jobs:
           cp -r server/. "$RUNNER_TEMP/challenge/submissions/ours-under-test/"
           cd "$RUNNER_TEMP/challenge"
           bash test/run.sh submissions/ours-under-test 2>&1 | tail -40
-      - name: Build one variant per setting under test
-        timeout-minutes: 15
-        shell: bash
-        run: |
-          # Each differs from the server in the settings named, so what a run measures is those settings.
-          build_variant() {
-            local name="$1"
-            shift
-            mkdir -p /tmp/variants
-            cp -r server "/tmp/variants/$name"
-            while [ "$#" -gt 0 ]; do
-              grep -q "$1" "/tmp/variants/$name/src/server.c" || { echo "no $1"; exit 1; }
-              sed -i "s/$1/$2/" "/tmp/variants/$name/src/server.c"
-              shift 2
-            done
-            bash "/tmp/variants/$name/build.sh" 2>&1 | tail -1
-          }
-          build_variant v-earlier "define CHECKPOINT_NICE 19" "define CHECKPOINT_NICE 10" "cache_size = -32768" "cache_size = -8192"
-          build_variant v-cache64 "cache_size = -32768" "cache_size = -65536"
       - name: Build the control
         shell: bash
         run: |
@@ -94,10 +75,9 @@ jobs:
           # Near the limit, interleaved so drift on this machine hits both servers.
           # 73%: the quota at which the control spends the same share here at 295k as on the box (59% against 81%).
           export CPU_QUOTA=73%
-          # A load near this CPU's limit, or nothing separates the settings: runners differ.
-          users=310000
-          grep -q 'EPYC 7763' /proc/cpuinfo || users=360000
-          for server in ours v-earlier v-cache64 control ours v-earlier v-cache64 control ours v-earlier v-cache64 control; do
+          # The box's kernel costs more per socket than this one, so its memory wall comes sooner than these loads suggest.
+          for run in "ours 320000" "control 320000" "ours 340000" "control 340000" "ours 320000" "control 320000" "ours 340000" "control 340000"; do
+            read -r server users <<< "$run"
             echo "=== $server at $users users"
             bash rig/measure.sh "$server" "$users" 90 150 "$RUNNER_TEMP/challenge" "$PWD/rig"
           done

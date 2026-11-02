@@ -60,8 +60,19 @@ if [ ! -f "$cgroup/cpu.stat" ] || ! curl -s -o /dev/null --max-time 2 "http://12
   sysctl kernel.io_uring_disabled 2>&1
   exit 1
 fi
+# A snapshot at the end misses what a spike was made of, so the cgroup's memory is kept second by second.
+samples="/tmp/memory-$unit.log"
+rm -f "$samples"
+sample_memory() {
+  awk -v current="$(cat "$cgroup/memory.current" 2> /dev/null)" '$1 ~ /^(anon|file|sock|slab)$/ {printf "%s=%.0f ", $1, $2 / 1048576} END {printf "total=%.0f\n", current / 1048576}' "$cgroup/memory.stat" >> "$samples" 2> /dev/null
+}
+memory_peaks() {
+  awk '{for (i = 1; i <= NF; i++) {split($i, kv, "="); if (kv[2] + 0 > most[kv[1]]) most[kv[1]] = kv[2] + 0}} END {printf "PEAKS"; for (k in most) printf " %s=%d", k, most[k]; printf "\n"}' "$samples" 2> /dev/null
+}
 died() {
   echo "SERVER DIED $unit at users=$users ($1)"
+  memory_peaks
+  tail -6 "$samples" 2> /dev/null | sed 's/^/LAST /'
   grep -v STATS "/tmp/$unit.log" | tail -12
   grep STATS "/tmp/$unit.log" | tail -4
   awk '$1 ~ /^(anon|file)$/' "$cgroup/memory.stat" 2> /dev/null
@@ -87,6 +98,7 @@ load=$!
 for _ in $(seq 1 "$ramp"); do
   sleep 1
   [ -f "$cgroup/cpu.stat" ] || died "during the ramp"
+  sample_memory
 done
 usage_start=$(awk '/usage_usec/ {print $2}' "$cgroup/cpu.stat")
 if [ "${PROFILE:-0}" = 1 ] && command -v perf > /dev/null; then
@@ -97,8 +109,10 @@ fi
 for _ in $(seq 1 "$hold"); do
   sleep 1
   [ -f "$cgroup/cpu.stat" ] || died "during the hold"
+  sample_memory
 done
 echo "MEMORY $(memory_breakdown)"
+memory_peaks
 echo "CPUSTAT $(awk '$1 ~ /^(user_usec|system_usec|nr_periods|nr_throttled|throttled_usec)$/ {printf "%s=%s ", $1, $2}' "$cgroup/cpu.stat")"
 usage_end=$(awk '/usage_usec/ {print $2}' "$cgroup/cpu.stat")
 peak=$(cat "$cgroup/memory.peak")
