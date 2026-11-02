@@ -1,0 +1,79 @@
+name: kvm
+on:
+  push:
+    branches: ['server/users-held']
+    paths: ['rig/kvm/**', 'rig/loadgen.c', 'server/src/server.c', '.github/workflows/kvm.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+env:
+  CHALLENGE_COMMIT: c7764b60
+jobs:
+  export:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Write the folder a pull request would add
+        shell: bash
+        run: |
+          image=$(sed -n 's/.*"sdk_image":"\([^"]*\)".*/\1/p' prismpm.lock)
+          chmod -R a+rwX emit server
+          docker run --rm --user "$(id -u):$(id -g)" --tmpfs /tmp:rw,exec,nosuid,size=4g \
+            --volume "$PWD:$PWD" --workdir "$PWD" --env HOME=/tmp/home "$image" \
+            bash -c 'mkdir -p "$HOME"; bash emit/submission/sdk-export.sh' 2>&1 | cut -c1-300
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: submission
+          path: emit/out/submission
+          include-hidden-files: true
+  measure:
+    needs: export
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: submission
+          path: entries/ours
+      - name: Prepare the host and the seed
+        timeout-minutes: 15
+        shell: bash
+        run: |
+          grep -m1 'model name' /proc/cpuinfo
+          nproc
+          ls -la /dev/kvm
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 qemu-utils cloud-image-utils sqlite3 jq > /dev/null
+          gcc -O2 -o rig/loadgen rig/loadgen.c -lm
+          git clone -q https://github.com/arjaythedev/twelve-dollar-server-challenge.git "$RUNNER_TEMP/challenge"
+          cd "$RUNNER_TEMP/challenge"
+          git checkout -q "$CHALLENGE_COMMIT"
+          bash seed/make-seed.sh > /dev/null 2>&1
+          jq -r '.[].token' seed/tokens.json > tokens.txt
+          cp -r submissions/c-iouring-pavlyhalim "$GITHUB_WORKSPACE/entries/control"
+      - name: Boot the guest and build each entry inside it
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          bash rig/kvm/prepare.sh "$RUNNER_TEMP/guest" "$PWD/entries/ours" "$PWD/entries/control"
+          scp -i "$RUNNER_TEMP/guest/key" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+            "$RUNNER_TEMP/challenge/seed/feed.db" deploy@10.77.0.2:feed.db
+      - name: Measure
+        timeout-minutes: 70
+        shell: bash
+        run: |
+          sudo prlimit --pid $$ --nofile=1048576:1048576
+          # Two minutes held, as the organiser's probe is. Ours and the control alternate so drift hits both.
+          for run in "ours 250000" "control 250000" "ours 300000" "control 300000" "ours 320000" "control 320000" "ours 340000" "control 340000"; do
+            read -r server users <<< "$run"
+            echo "=== $server at $users users"
+            bash rig/kvm/measure.sh "$RUNNER_TEMP/guest" "$server" "$users" 60 120 "$PWD/rig/loadgen" "$RUNNER_TEMP/challenge/tokens.txt"
+          done

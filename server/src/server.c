@@ -41,6 +41,7 @@
 
 enum { OP_ACCEPT = 1, OP_RECV, OP_SEND, OP_CLOSE, OP_WAKE, OP_IGNORE };
 enum { C_FREE, C_OPEN, C_CLOSING };
+enum { ARMED_NOTHING, ARMED_MULTISHOT, ARMED_ONCE };
 enum { K_CONST, K_HEALTH, K_FEED, K_POST, K_LIKE, K_CREATE, K_HELD };
 
 typedef struct {
@@ -1556,7 +1557,7 @@ static void arm_recv(int index, uint32_t slot) {
     s->flags |= IOSQE_FIXED_FILE | IOSQE_BUFFER_SELECT;
     s->buf_group = BUFFER_GROUP;
     io_uring_sqe_set_data64(s, encode(OP_RECV, index, c->generation, slot));
-    c->armed = 1;
+    c->armed = ARMED_MULTISHOT;
 }
 
 static void close_conn(int index, uint32_t slot) {
@@ -1595,8 +1596,9 @@ static void queue_read(int index, uint32_t slot) {
 
 static void take_bytes(int index, uint32_t slot, const char *data, uint32_t n, int buffer);
 
-// Re-arms the receives that ended, mostly because the buffers ran out after a stall. A receive armed on a socket with
-// data waiting takes a buffer at once, so half the buffers at a time: past that, each re-arm would only end again.
+// Reads what the receives that ended left behind, mostly because the buffers ran out after a stall. Re-arming them all at
+// once ran the buffers dry again on a real droplet (#264), so single reads, half the buffers at a time, until each socket
+// is empty. Only then is its multishot receive armed again.
 static int issue_reads(void) {
     int issued = 0;
     for (int index = 0; index < ring_count; index++) {
@@ -1608,7 +1610,12 @@ static int issue_reads(void) {
             c->queued = 0;
             if (c->state != C_OPEN) continue;
             if (!c->armed) {
-                arm_recv(index, slot);
+                struct io_uring_sqe *s = next_sqe(ring);
+                io_uring_prep_recv(s, (int)slot, NULL, BUFFER_SIZE, MSG_DONTWAIT);
+                s->flags |= IOSQE_FIXED_FILE | IOSQE_BUFFER_SELECT;
+                s->buf_group = BUFFER_GROUP;
+                io_uring_sqe_set_data64(s, encode(OP_RECV, index, c->generation, slot));
+                c->armed = ARMED_ONCE;
                 issued++;
             }
             // Bytes left in a spill when the queue was full wait for no new read.
@@ -1750,13 +1757,22 @@ static int drain_ring(int index) {
                 break;
             }
             int ended = !(cqe->flags & IORING_CQE_F_MORE);
+            int was_single_read = c->armed == ARMED_ONCE;
             if (ended) c->armed = 0;
             if (cqe->res > 0 && has_buffer) {
                 take_bytes(index, slot, (const char *)ring->memory + (size_t)id * BUFFER_SIZE, (uint32_t)cqe->res, (int)id);
-                if (ended) queue_read(index, slot);
+                if (ended) {
+                    if (was_single_read && cqe->res < BUFFER_SIZE) {
+                        if (c->state == C_OPEN) arm_recv(index, slot);
+                    } else {
+                        queue_read(index, slot);
+                    }
+                }
             } else {
                 if (has_buffer) return_buffer(index, id);
-                if (cqe->res == -ENOBUFS || cqe->res == -EAGAIN) {
+                if (cqe->res == -EAGAIN && was_single_read) {
+                    arm_recv(index, slot);
+                } else if (cqe->res == -ENOBUFS || cqe->res == -EAGAIN) {
                     stat_rearms++;
                     queue_read(index, slot);
                 } else {

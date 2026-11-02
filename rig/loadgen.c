@@ -234,6 +234,8 @@ static void on_readable(uint32_t id) {
     }
 }
 
+static uint32_t source_base = 0x7F010001;
+
 static void open_user(uint32_t id) {
     User *u = &users[id];
     int fd = socket(AF_INET, SOCK_STREAM | SOCK_NONBLOCK, 0);
@@ -246,7 +248,7 @@ static void open_user(uint32_t id) {
     setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &one, sizeof one);
     setsockopt(fd, IPPROTO_IP, IP_BIND_ADDRESS_NO_PORT, &one, sizeof one);
     struct sockaddr_in source = {.sin_family = AF_INET};
-    source.sin_addr.s_addr = htonl(0x7F010001 + id % 32);
+    source.sin_addr.s_addr = htonl(source_base + id % 32);
     bind(fd, (struct sockaddr *)&source, sizeof source);
     u->fd = fd;
     open_connections++;
@@ -305,6 +307,13 @@ int main(int argc, char **argv) {
     server.sin_family = AF_INET;
     server.sin_port = htons(port);
     server.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    // In a guest, the server is across a network device and each source address is one the host holds.
+    if (getenv("LOAD_TARGET")) inet_pton(AF_INET, getenv("LOAD_TARGET"), &server.sin_addr);
+    if (getenv("LOAD_SOURCE")) {
+        struct in_addr first;
+        inet_pton(AF_INET, getenv("LOAD_SOURCE"), &first);
+        source_base = ntohl(first.s_addr);
+    }
     users = calloc(count, sizeof *users);
     for (uint32_t i = 0; i < count; i++) users[i].fd = -1;
     for (int i = 0; i < SLOTS; i++) wheel[i] = NONE;

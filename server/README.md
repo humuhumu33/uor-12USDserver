@@ -42,7 +42,7 @@ The theorems are about the LexLean definitions. Nothing proves that the C uses a
 One thread runs the event loop, HTTP, JWT, JSON and SQLite reads. A second thread only runs WAL checkpoints.
 
 - **Sockets.** Direct descriptors, so `LimitNOFILE=65535` caps one ring's table and not the server. Up to 8 rings, made as connections need them. Eight `SO_REUSEPORT` listeners.
-- **Reading.** A multishot receive into provided buffers, 4,096 x 1 KB per ring, one submission fewer per request than a poll and a read. A receive that ends when buffers run out is re-armed in bounded rounds, to limit a storm of re-arms after a stall.
+- **Reading.** A multishot receive into provided buffers, 4,096 x 1 KB per ring, one submission fewer per request than a poll and a read. A receive that ends when buffers run out isn't re-armed at once: its socket gets single reads in bounded rounds until it is empty, the fix #264 measured on real droplets.
 - **Drain first.** Requests are read out of their sockets as soon as they arrive, into a queue of up to 32,768, and answered up to 2,048 per batch. A request waiting in a socket costs 3-4 KB of network buffer; read out, it costs about 100 bytes.
 - **Batches.** Each batch is one SQLite transaction: reads from its snapshot, then writes through prepared statements, then `COMMIT`, then every response. No response leaves before its commit (rule 6).
 - **Reads** walk SQLite's own B-tree cursors inside that transaction, with no SQL engine and no remembered data: the organiser allowed this for #153. The feed walks `posts_created_at_id_idx`, seeks the 20 posts, and counts likes with one range walk where it can. Every request reads SQLite while it is served (rule 5).
