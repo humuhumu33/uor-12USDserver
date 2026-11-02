@@ -45,7 +45,19 @@ The byte 127 defect shows what each gate is for: the proofs passed, and only the
 
 The folder a pull request adds holds the readable C and the plain Lean. `build.sh` checks the theorems with official Lean, runs the program, compares every file, and tests the tables. `emit/submission/plant.sh` puts defects into a copy of that folder, and the build must stop on each, after an untouched copy has built.
 
-BOX_RESULTS
+| Defect | Failing command | Diagnostic |
+| --- | --- | --- |
+| `gateNext` changed so a copied log no longer opens the gate | `PGO=0 bash build.sh` | `unsolved goals` in `the_gate_opens_when_the_log_is_copied` |
+| A theorem's proof replaced by `sorry` | `PGO=0 bash build.sh` | `Claims.lean: send_only_after_commit rests on sorryAx` |
+| `README.md` edited without the program | `PGO=0 bash build.sh` | `cmp`: differs, exit 1 |
+| `sendAllowed` redefined as `true` | `PGO=0 bash build.sh` | Stops on warnings as failures: unused variables and an unused simp argument. `Claims.lean` wasn't reached |
+| A theorem deleted | `PGO=0 bash build.sh` | `Claims.lean: Unknown constant the_top_byte_is_plain` |
+| An axiom added and used | `PGO=0 bash build.sh` | `Claims.lean: a_quote_is_escaped rests on UorEmit.Emit.cheat` |
+| C edited inside `Emit.lean` | `PGO=0 bash build.sh` | `src/server.c generated/src/server.c differ` |
+| `src/server.c` edited alone | `PGO=0 bash build.sh` | `src/server.c generated/src/server.c differ` |
+| `src/core.h` edited alone | `PGO=0 bash build.sh` | `src/core.h generated/src/core.h differ` |
+
+Recorded from `submission` run 41514549488, commit `473c892`: `UNTOUCHED exit=0`, `PLANTED escaped=0`, and `passed=42 failed=0` from the challenge's `test/run.sh` on the same folder.
 
 ## Known gaps
 
