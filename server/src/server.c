@@ -28,23 +28,28 @@
 #define BUFFER_SIZE 1024
 #define BUFFER_GROUP 1
 #define ARENAS 8
-#define ARENA_SIZE (4u << 20)
+#define ARENA_SIZE (2u << 20)
 #define RESPONSE_RESERVE (128u << 10)
-#define MAX_REQUESTS 4096
+// A request read out of its socket costs its Request here, one waiting in the socket 3-4 KB of network buffer.
+#define MAX_REQUESTS 32768
+#define BATCH_ANSWERS 2048
+#define HOLD_CAP 8192
 #define SPILL_CAP (64u << 10)
 #define WAIT_COMPLETIONS 64
 #define WAIT_NANOSECONDS 2000000
 
 enum { OP_ACCEPT = 1, OP_POLL, OP_RECV, OP_SEND, OP_CLOSE, OP_WAKE, OP_IGNORE };
 enum { C_FREE, C_OPEN, C_CLOSING };
-enum { K_CONST, K_HEALTH, K_FEED, K_POST, K_LIKE, K_CREATE };
+enum { K_CONST, K_HEALTH, K_FEED, K_POST, K_LIKE, K_CREATE, K_HELD };
 
 typedef struct {
     uint8_t state;
     uint8_t queued;
     uint8_t close_after;
     uint16_t sends;
+    uint16_t generation;
     uint32_t spill_len;
+    uint32_t held;
     uint8_t *spill;
 } Conn;
 
@@ -77,8 +82,11 @@ typedef struct {
     uint8_t failed;
     uint16_t status;
     uint16_t buffer;
+    uint16_t generation;
     uint32_t slot;
+    uint32_t scratch_end;
     int arena;
+    char *owned;
     const char *response;
     uint32_t response_len;
     int64_t id;
@@ -94,9 +102,11 @@ static int ring_count;
 static Arena arenas[ARENAS];
 static int current_arena;
 static Request requests[MAX_REQUESTS];
-static uint32_t request_count;
+static uint32_t request_head, request_count;
+static Request held[HOLD_CAP];
+static uint32_t held_count;
 static char *scratch;
-static uint32_t scratch_used;
+static uint32_t scratch_write, scratch_tail;
 #define SCRATCH_SIZE (8u << 20)
 static int listeners[ACCEPT_LISTENERS];
 static uint32_t table_size;
@@ -480,18 +490,40 @@ static void check_columns(const char *table, const char *expected) {
     if (strcmp(got, expected)) die("the schema is not the one this server was written for");
 }
 
-/* A second connection runs checkpoints so a slow fsync never stalls responses. */
+/* A second connection runs checkpoints so a slow fsync never stalls responses. A passive checkpoint can't
+ * finish while commits keep arriving, and the log only restarts once it has, so under steady writes it grows
+ * as dirty memory until the box runs out. Past WAL_GATE_FRAMES writes wait, reads go on, and the log restarts. */
 #define CHECKPOINT_FRAMES 1000
+#define WAL_GATE_FRAMES 4000
+#define WAL_INLINE_FRAMES 16384
+#define WAL_GATE_NANOSECONDS 1000000000LL
 static sqlite3 *checkpoint_db;
 static pthread_mutex_t checkpoint_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t checkpoint_cond = PTHREAD_COND_INITIALIZER;
-static int checkpoint_wanted;
+static int checkpoint_wanted, wal_gate, wal_frames;
+static uint64_t commit_number, checkpointed_commit;
+static int64_t wal_gate_since;
+static uint64_t stat_gates, stat_gate_timeouts, stat_inline, stat_held_most, stat_queue_most, stat_frames_most;
+
+static int64_t monotonic_nanoseconds(void) {
+    struct timespec t;
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (int64_t)t.tv_sec * 1000000000LL + t.tv_nsec;
+}
 
 static int wal_hook(void *arg, sqlite3 *d, const char *name, int frames) {
     (void)arg; (void)d; (void)name;
+    wal_frames = frames;
+    if ((uint64_t)frames > stat_frames_most) stat_frames_most = (uint64_t)frames;
+    __atomic_store_n(&commit_number, commit_number + 1, __ATOMIC_RELEASE);
+    if (frames >= WAL_GATE_FRAMES && !wal_gate) {
+        wal_gate_since = monotonic_nanoseconds();
+        __atomic_store_n(&wal_gate, 1, __ATOMIC_RELEASE);
+        stat_gates++;
+    }
     if (frames >= CHECKPOINT_FRAMES && !__atomic_load_n(&checkpoint_wanted, __ATOMIC_RELAXED)) {
         pthread_mutex_lock(&checkpoint_lock);
-        checkpoint_wanted = 1;
+        __atomic_store_n(&checkpoint_wanted, 1, __ATOMIC_RELAXED);
         pthread_cond_signal(&checkpoint_cond);
         pthread_mutex_unlock(&checkpoint_lock);
     }
@@ -504,16 +536,34 @@ static void *checkpoint_main(void *arg) {
     for (;;) {
         pthread_mutex_lock(&checkpoint_lock);
         while (!checkpoint_wanted) pthread_cond_wait(&checkpoint_cond, &checkpoint_lock);
+        __atomic_store_n(&checkpoint_wanted, 0, __ATOMIC_RELAXED);
         pthread_mutex_unlock(&checkpoint_lock);
+        uint64_t seen = __atomic_load_n(&commit_number, __ATOMIC_ACQUIRE);
         int log = 0, done = 0;
-        sqlite3_wal_checkpoint_v2(checkpoint_db, "main", SQLITE_CHECKPOINT_PASSIVE, &log, &done);
-        __atomic_store_n(&checkpoint_wanted, 0, __ATOMIC_RELEASE);
+        int rc = sqlite3_wal_checkpoint_v2(checkpoint_db, "main", SQLITE_CHECKPOINT_PASSIVE, &log, &done);
+        int complete = rc == SQLITE_OK && log == done;
+        if (complete) __atomic_store_n(&checkpointed_commit, seen, __ATOMIC_RELEASE);
+        // No commit will wake this thread while writes are held.
+        if (__atomic_load_n(&wal_gate, __ATOMIC_ACQUIRE) && (!complete || seen != __atomic_load_n(&commit_number, __ATOMIC_ACQUIRE))) {
+            pthread_mutex_lock(&checkpoint_lock);
+            __atomic_store_n(&checkpoint_wanted, 1, __ATOMIC_RELAXED);
+            pthread_mutex_unlock(&checkpoint_lock);
+        }
     }
     return 0;
 }
 
+// True once writes may go on. Every frame is in the database file, or the wait has gone on too long.
+static int wal_gate_opens(void) {
+    if (__atomic_load_n(&checkpointed_commit, __ATOMIC_ACQUIRE) == commit_number) return 1;
+    if (monotonic_nanoseconds() - wal_gate_since < WAL_GATE_NANOSECONDS) return 0;
+    stat_gate_timeouts++;
+    return 1;
+}
+
 static void db_open(const char *path) {
-    if (sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, 0) != SQLITE_OK) die("open the database");
+    // Only this process opens the file, so no fcntl lock is taken per transaction.
+    if (sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, "unix-excl") != SQLITE_OK) die("open the database");
     exec("PRAGMA journal_mode = WAL");
     exec("PRAGMA synchronous = NORMAL");
     exec("PRAGMA temp_store = MEMORY");
@@ -543,7 +593,7 @@ static void db_open(const char *path) {
     cur_users = malloc(size);
     cur_time = malloc(size);
     cur_likes = malloc(size);
-    if (sqlite3_open_v2(path, &checkpoint_db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, 0) != SQLITE_OK) die("open the checkpoint connection");
+    if (sqlite3_open_v2(path, &checkpoint_db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_NOMUTEX, "unix-excl") != SQLITE_OK) die("open the checkpoint connection");
     sqlite3_exec(checkpoint_db, "PRAGMA synchronous = NORMAL", 0, 0, 0);
     pthread_t thread;
     if (pthread_create(&thread, 0, checkpoint_main, 0)) die("checkpoint thread");
@@ -1041,11 +1091,19 @@ static int parse_id(const char *p, size_t n, int64_t *id) {
     return 0;
 }
 
+// A ring: requests leave the queue in the order they entered, so what they own is freed in that order too.
 static char *scratch_alloc(size_t n) {
-    if (scratch_used + n > SCRATCH_SIZE) return NULL;
-    char *p = scratch + scratch_used;
-    scratch_used += (uint32_t)n;
-    return p;
+    uint32_t at = scratch_write;
+    if (at >= scratch_tail) {
+        if (at + n > SCRATCH_SIZE) {
+            if (n >= scratch_tail) return NULL;
+            at = 0;
+        }
+    } else if (at + n >= scratch_tail) {
+        return NULL;
+    }
+    scratch_write = at + (uint32_t)n;
+    return scratch + at;
 }
 
 // Verifies the signature first, then the claims. Fills the user and username, or names the failure.
@@ -1074,8 +1132,7 @@ static int authenticate(Request *r, const char *header, size_t n) {
     j_space(&check);
     if (check.p != check.end || !j_find(header_json, header_len, "alg", &alg)) return E_BAD_TOKEN;
     if ((size_t)(alg.end - alg.p) < 7 || memcmp(alg.p, "\"HS256\"", 7)) return E_BAD_TOKEN;
-    char *payload = scratch_alloc(4096);
-    if (!payload) return E_INTERNAL;
+    char payload[4096];
     size_t payload_len;
     if ((size_t)(dot2 - dot1 - 1) > 4096 || b64_decode(dot1 + 1, (size_t)(dot2 - dot1 - 1), (uint8_t *)payload, &payload_len)) return E_BAD_TOKEN;
     check = (Json){payload, payload + payload_len, 0};
@@ -1282,10 +1339,26 @@ static int ring_setup(int index) {
         io_uring_queue_exit(&ring->ring);
         return -1;
     }
-    int error = 0;
-    ring->buffers = io_uring_setup_buf_ring(&ring->ring, BUFFER_COUNT, BUFFER_GROUP, 0, &error);
-    if (!ring->buffers) {
-        fprintf(stderr, "ring %d, buffer ring: %s\n", index, strerror(-error));
+    ring->buffers = mmap(NULL, BUFFER_COUNT * sizeof(struct io_uring_buf), PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_POPULATE, -1, 0);
+    if (ring->buffers == MAP_FAILED) {
+        fprintf(stderr, "ring %d, buffer ring memory\n", index);
+        io_uring_queue_exit(&ring->ring);
+        return -1;
+    }
+    io_uring_buf_ring_init(ring->buffers);
+    struct io_uring_buf_reg registration;
+    memset(&registration, 0, sizeof registration);
+    registration.ring_addr = (uint64_t)(uintptr_t)ring->buffers;
+    registration.ring_entries = BUFFER_COUNT;
+    registration.bgid = BUFFER_GROUP;
+    rc = io_uring_register_buf_ring(&ring->ring, &registration, 0);
+    if (rc == -EINVAL) {
+        // Ubuntu's 6.8.0-136 and later invert a reserved-field check (Launchpad #2162843, found by #245).
+        registration.resv[0] = 1;
+        rc = io_uring_register_buf_ring(&ring->ring, &registration, 0);
+    }
+    if (rc < 0) {
+        fprintf(stderr, "ring %d, buffer ring: %s\n", index, strerror(-rc));
         io_uring_queue_exit(&ring->ring);
         return -1;
     }
@@ -1377,9 +1450,13 @@ static void queue_read(int index, uint32_t slot) {
 // Reads what is waiting as soon as it is known to be waiting, up to the free buffers.
 static int issue_reads(void) {
     int issued = 0;
+    uint32_t backlog = request_count - request_head;
+    uint32_t room = backlog + BUFFER_COUNT * MAX_RINGS < MAX_REQUESTS ? MAX_REQUESTS - backlog - BUFFER_COUNT * MAX_RINGS : 0;
     for (int index = 0; index < ring_count; index++) {
         Ring *ring = &rings[index];
         uint32_t n = ring->queued < ring->free_buffers ? ring->queued : ring->free_buffers;
+        if (n > room) n = room;
+        room -= n;
         for (uint32_t i = 0; i < n; i++) {
             uint32_t slot = ring->read_queue[i];
             ring->conns[slot].queued = 0;
@@ -1459,6 +1536,11 @@ static void take_bytes(int index, uint32_t slot, const char *data, uint32_t n, i
         // Bytes left in a spill wait for the next read, which never comes if the client is waiting too.
         if (UNLIKELY(request_count == MAX_REQUESTS)) {
             run_batch();
+            if (request_head) {
+                memmove(requests, requests + request_head, (request_count - request_head) * sizeof(Request));
+                request_count -= request_head;
+                request_head = 0;
+            }
             if (request_count == MAX_REQUESTS) {
                 stranded = 1;
                 break;
@@ -1471,6 +1553,8 @@ static void take_bytes(int index, uint32_t slot, const char *data, uint32_t n, i
         r->ring = (uint8_t)index;
         r->slot = slot;
         r->buffer = 0xffff;
+        r->generation = c->generation;
+        r->scratch_end = scratch_write;
         request_count++;
         at += used;
         kept_buffer = 1;
@@ -1538,6 +1622,8 @@ static int drain_ring(int index) {
             c->queued = 0;
             c->close_after = 0;
             c->sends = 0;
+            c->held = 0;
+            c->generation++;
             if (ring->open) ring->open--;
             break;
         default:
@@ -1578,7 +1664,8 @@ static int response_room(void) {
 static void prepare_send(Request *r) {
     Ring *ring = &rings[r->ring];
     Conn *c = &ring->conns[r->slot];
-    if (c->state != C_OPEN) return;
+    // A request waiting in a queue can outlive its connection, and the slot can already hold a new one.
+    if (c->state != C_OPEN || c->generation != r->generation) return;
     struct io_uring_sqe *s = next_sqe(ring);
     io_uring_prep_send(s, (int)r->slot, r->response, r->response_len, MSG_WAITALL | MSG_NOSIGNAL);
     s->flags |= IOSQE_FIXED_FILE;
@@ -1588,16 +1675,43 @@ static void prepare_send(Request *r) {
     if (r->close) c->close_after = 1;
 }
 
+static void hold_request(Request *r) {
+    Request *h = &held[held_count++];
+    *h = *r;
+    // What it owns in the scratch ring would otherwise block everything queued behind it.
+    size_t total = (size_t)r->username_len + r->text_len;
+    if (total) {
+        h->owned = malloc(total);
+        if (!h->owned) die("held request");
+        if (r->username_len) memcpy(h->owned, r->username, r->username_len);
+        if (r->text_len) memcpy(h->owned + r->username_len, r->text, r->text_len);
+        if (r->username_len) h->username = h->owned;
+        if (r->text_len) h->text = h->owned + r->username_len;
+    }
+    rings[r->ring].conns[r->slot].held++;
+    r->kind = K_HELD;
+    if (held_count > stat_held_most) stat_held_most = held_count;
+}
+
+static inline int should_hold(const Request *r) {
+    if (held_count >= HOLD_CAP || r->kind == K_HELD) return 0;
+    if (__atomic_load_n(&wal_gate, __ATOMIC_RELAXED) && (r->kind == K_CREATE || r->kind == K_LIKE)) return 1;
+    // A later request on a connection must not overtake one that is held.
+    const Conn *c = &rings[r->ring].conns[r->slot];
+    return c->held && c->generation == r->generation;
+}
+
 // One SQLite transaction: reads from the batch's snapshot, then writes, then COMMIT, then every response.
 // When response memory runs out, the requests past that point wait for the next batch, in order.
-static void run_batch(void) {
-    if (!request_count) return;
-    batch_number++;
-    if (!choose_arena()) return;
+static uint32_t run_list(Request *list, uint32_t count, int may_hold) {
     int database_failed = 0;
-    uint32_t limit = request_count;
+    uint32_t limit = count;
     for (uint32_t i = 0; i < limit; i++) {
-        Request *r = &requests[i];
+        Request *r = &list[i];
+        if (UNLIKELY(may_hold) && should_hold(r)) {
+            hold_request(r);
+            continue;
+        }
         if (UNLIKELY(!response_room())) {
             limit = i;
             break;
@@ -1612,7 +1726,7 @@ static void run_batch(void) {
         if (rc) respond_error(r, E_INTERNAL);
     }
     for (uint32_t i = 0; i < limit; i++) {
-        Request *r = &requests[i];
+        Request *r = &list[i];
         if (UNLIKELY(!response_room())) {
             limit = i;
             break;
@@ -1630,13 +1744,48 @@ static void run_batch(void) {
     }
     if (batch_end()) database_failed = 1;
     for (uint32_t i = 0; i < limit; i++) {
-        Request *r = &requests[i];
+        Request *r = &list[i];
+        if (r->kind == K_HELD) continue;
         if (database_failed && r->kind != K_CONST) respond_error(r, E_INTERNAL);
         prepare_send(r);
     }
-    request_count -= limit;
-    if (request_count) memmove(requests, requests + limit, request_count * sizeof(Request));
-    else scratch_used = 0;
+    return limit;
+}
+
+static void run_batch(void) {
+    uint32_t queued = request_count - request_head;
+    if (!queued && !held_count) return;
+    batch_number++;
+    if (!choose_arena()) return;
+    if (UNLIKELY(wal_gate) && wal_gate_opens()) __atomic_store_n(&wal_gate, 0, __ATOMIC_RELEASE);
+    if (UNLIKELY(wal_frames >= WAL_INLINE_FRAMES)) {
+        // Last resort: the checkpoint thread is too far behind for the log to stay in memory.
+        sqlite3_wal_checkpoint_v2(db, "main", SQLITE_CHECKPOINT_PASSIVE, NULL, NULL);
+        wal_frames = 0;
+        stat_inline++;
+    }
+    if (UNLIKELY(held_count && !wal_gate)) {
+        uint32_t done = run_list(held, held_count < BATCH_ANSWERS ? held_count : BATCH_ANSWERS, 0);
+        for (uint32_t i = 0; i < done; i++) {
+            Conn *c = &rings[held[i].ring].conns[held[i].slot];
+            if (c->held && c->generation == held[i].generation) c->held--;
+            free(held[i].owned);
+        }
+        held_count -= done;
+        if (held_count) memmove(held, held + done, held_count * sizeof(Request));
+        submit_all();
+        return;
+    }
+    if (!queued) return;
+    if (queued > stat_queue_most) stat_queue_most = queued;
+    uint32_t done = run_list(requests + request_head, queued < BATCH_ANSWERS ? queued : BATCH_ANSWERS, wal_gate || held_count);
+    request_head += done;
+    if (request_head == request_count) {
+        request_head = request_count = 0;
+        scratch_write = scratch_tail = 0;
+    } else if (done) {
+        scratch_tail = requests[request_head - 1].scratch_end;
+    }
     submit_all();
 }
 
@@ -1768,6 +1917,27 @@ static void train_stop(int signal_number) {
     exit(0);
 }
 
+// With no swap, file-backed pages are all reclaim can take at the memory wall, and the loop would stall reading
+// its own code back from disk. Best effort, since the limit is 8 MiB under systemd.
+static void lock_code(void) {
+    char exe[512], line[1024];
+    ssize_t n = readlink("/proc/self/exe", exe, sizeof exe - 1);
+    FILE *maps = fopen("/proc/self/maps", "r");
+    if (n <= 0 || !maps) {
+        if (maps) fclose(maps);
+        return;
+    }
+    exe[n] = 0;
+    while (fgets(line, sizeof line, maps)) {
+        unsigned long low, high;
+        int at = 0;
+        if (sscanf(line, "%lx-%lx %*s %*s %*s %*s %n", &low, &high, &at) < 2 || !at) continue;
+        line[strcspn(line, "\n")] = 0;
+        if (!strcmp(line + at, exe) && mlock((void *)low, high - low)) fprintf(stderr, "mlock: %s\n", strerror(errno));
+    }
+    fclose(maps);
+}
+
 int main(void) {
     const char *path = getenv("SQLITE_PATH"), *secret = getenv("JWT_SECRET"), *host = getenv("HOST"), *port = getenv("PORT");
     const char *train = getenv("SERVER_PROFILE_TRAINING");
@@ -1775,6 +1945,8 @@ int main(void) {
     if (train) {
         train_database(path);
         signal(SIGTERM, train_stop);
+    } else {
+        lock_code();
     }
     struct rlimit nofile;
     getrlimit(RLIMIT_NOFILE, &nofile);
@@ -1805,11 +1977,20 @@ int main(void) {
     submit_all();
     fprintf(stderr, "listening, %u connections per ring\n", table_size);
     struct __kernel_timespec timeout = {.tv_sec = 0, .tv_nsec = WAIT_NANOSECONDS};
+    uint64_t next_stats = 0;
+    int stats = getenv("SERVER_STATS") != NULL;
+    memset(requests, 0, sizeof requests);
     for (;;) {
         struct io_uring_cqe *cqe;
-        io_uring_submit_and_wait_timeout(&rings[0].ring, &cqe, WAIT_COMPLETIONS, &timeout, NULL);
+        // A backlog is work already in hand, so there is nothing to wait for.
+        io_uring_submit_and_wait_timeout(&rings[0].ring, &cqe, request_count > request_head ? 0 : WAIT_COMPLETIONS, &timeout, NULL);
         rings[0].pending_sqes = 0;
         now_seconds = (uint64_t)time(0);
+        if (UNLIKELY(stats && now_seconds >= next_stats)) {
+            next_stats = now_seconds + 10;
+            fprintf(stderr, "STATS gates=%lu gate_timeouts=%lu inline=%lu frames_most=%lu queue_most=%lu held_most=%lu rings=%d\n", stat_gates, stat_gate_timeouts, stat_inline, stat_frames_most, stat_queue_most, stat_held_most, ring_count);
+            stat_frames_most = stat_queue_most = stat_held_most = 0;
+        }
         for (int rounds = 0; rounds < 4; rounds++) {
             int seen = 0;
             for (int index = 0; index < ring_count; index++) seen += drain_ring(index);

@@ -37,7 +37,7 @@ quota=()
 # A transient service, as the organiser's systemd unit runs entries.
 sudo systemd-run --unit="$unit" --collect -p AllowedCPUs=0 "${quota[@]}" -p MemoryMax=1750M -p MemorySwapMax=0 -p LimitNOFILE="$limit" -p LimitCORE=infinity \
   -p AmbientCapabilities=CAP_NET_BIND_SERVICE -p StandardOutput="file:/tmp/$unit.log" -p StandardError="file:/tmp/$unit.log" \
-  --setenv=SQLITE_PATH="$db" --setenv=JWT_SECRET=twelve-dollar-challenge --setenv=HOST=127.0.0.1 --setenv=PORT="$port" \
+  --setenv=SQLITE_PATH="$db" --setenv=JWT_SECRET=twelve-dollar-challenge --setenv=HOST=127.0.0.1 --setenv=PORT="$port" --setenv=SERVER_STATS=1 \
   --uid="$(id -u)" --gid="$(id -g)" "${command[@]}"
 for _ in $(seq 1 60); do
   curl -s -o /dev/null --max-time 2 "http://127.0.0.1:$port/health" && break
@@ -59,7 +59,9 @@ if [ ! -f "$cgroup/cpu.stat" ] || ! curl -s -o /dev/null --max-time 2 "http://12
 fi
 died() {
   echo "SERVER DIED $unit at users=$users ($1)"
-  tail -20 "/tmp/$unit.log"
+  grep -v STATS "/tmp/$unit.log" | tail -12
+  grep STATS "/tmp/$unit.log" | tail -4
+  awk '$1 ~ /^(anon|file)$/' "$cgroup/memory.stat" 2> /dev/null
   sudo journalctl -u "$unit.service" -n 15 --no-pager 2>&1 | cut -c1-200
   sudo dmesg | grep -iE 'segfault|general protection|out of memory|oom-kill|killed process|tcp: out of' | tail -8 | cut -c1-240
   for core in /tmp/core.*; do
@@ -101,6 +103,7 @@ available=$(awk '/MemAvailable/ {print $2}' /proc/meminfo)
 sockstat=$(awk '/^TCP:/ {print $11}' /proc/net/sockstat)
 wait "$load"
 grep -E 'HOLD|WINDOW' "/tmp/load-$unit.log" | tail -10
+grep STATS "/tmp/$unit.log" | tail -4
 if [ -f "/tmp/perf-$unit.data" ]; then
   echo "PROFILE $unit"
   sudo perf report -i "/tmp/perf-$unit.data" --stdio --no-children --sort sym -g none --percent-limit 0.7 2> /dev/null | grep -E '^ +[0-9]' | head -45

@@ -16,7 +16,7 @@ FLAGS=(-std=gnu11 -O3 -g -march=x86-64-v3 -mtune=cascadelake -mprefer-vector-wid
   -DSQLITE_THREADSAFE=2 -DSQLITE_DEFAULT_MEMSTATUS=0 -DSQLITE_DEFAULT_WAL_SYNCHRONOUS=1 -DSQLITE_OMIT_SHARED_CACHE
   -DSQLITE_OMIT_DEPRECATED -DSQLITE_OMIT_LOAD_EXTENSION -DSQLITE_OMIT_PROGRESS_CALLBACK -DSQLITE_USE_ALLOCA -DSQLITE_DQS=0
   -DSQLITE_TEMP_STORE=3 -DNDEBUG "-Ivendor/$SQLITE")
-LINK=(-l:liburing.a -lm)
+LINK=(-static -l:liburing.a -lm)
 if [ "${PGO:-1}" = 0 ]; then
   gcc "${FLAGS[@]}" -o bin/server src/server.c "${LINK[@]}"
 else
