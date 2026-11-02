@@ -18,6 +18,7 @@ for _ in $(seq 1 60); do
 done
 curl -s --max-time 2 "http://$GUEST/health" | head -c 120
 echo
+curl -s -o /dev/null --max-time 2 "http://$GUEST/health" || { echo "SERVER did not come up: $entry"; "${SSH[@]}" "tail -5 /tmp/$unit.log | cut -c1-200"; exit 1; }
 
 # The guest keeps its own memory record, since it has to be read back after any failure.
 "${SSH[@]}" "nohup sh -c 'while sleep 2; do

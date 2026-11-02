@@ -30,6 +30,11 @@ ethernets:
     match:
       name: "en*"
     addresses: [$GUEST/16]
+    routes:
+      - to: default
+        via: 10.77.0.1
+    nameservers:
+      addresses: [1.1.1.1, 8.8.8.8]
 EOF
 printf 'instance-id: box\nlocal-hostname: box\n' > meta-data
 cloud-localds -N network-config seed.img user-data meta-data
@@ -39,8 +44,13 @@ sudo ip addr add 10.77.0.1/16 dev tap0
 # Each client address gives another 60,000 connections to the one server port.
 for i in $(seq 0 31); do sudo ip addr add "10.77.1.$i/16" dev tap0; done
 sudo ip link set tap0 up
-sudo iptables -t raw -A PREROUTING -i tap0 -j NOTRACK
-sudo iptables -t raw -A OUTPUT -o tap0 -j NOTRACK
+# The load traffic is untracked, as on the box. The guest's own way out, for installing, is translated.
+sudo iptables -t raw -A PREROUTING -i tap0 -d 10.77.1.0/24 -j NOTRACK
+sudo iptables -t raw -A OUTPUT -o tap0 -s 10.77.1.0/24 -j NOTRACK
+sudo sysctl -q -w net.ipv4.ip_forward=1
+sudo iptables -t nat -A POSTROUTING -s 10.77.0.0/16 ! -d 10.77.0.0/16 -j MASQUERADE
+sudo iptables -I FORWARD -i tap0 -j ACCEPT
+sudo iptables -I FORWARD -o tap0 -j ACCEPT
 sudo sysctl -q -w fs.nr_open=2097152 net.ipv4.ip_local_port_range="1024 65000"
 
 sudo taskset -c 0,1 qemu-system-x86_64 -enable-kvm -cpu host -smp 1 -m 2048 -display none -daemonize \
@@ -60,6 +70,9 @@ done
 for entry in "$@"; do
   name=$(basename "$entry")
   tar -C "$entry" -czf - . | "${SSH[@]}" "mkdir -p entries/$name && tar -C entries/$name -xzf -"
-  "${SSH[@]}" "sudo bash entries/$name/install.sh > /dev/null 2>&1; echo \"INSTALLED $name \$?\"; cd entries/$name && /usr/bin/time -f \"BUILD $name seconds=%e resident_kb=%M exit=%x\" bash build.sh 2>&1 | tail -4 | cut -c1-200"
+  "${SSH[@]}" "sudo bash entries/$name/install.sh 2>&1 | tail -3 | cut -c1-200; echo \"INSTALLED $name \${PIPESTATUS[0]}\""
+  "${SSH[@]}" "cd entries/$name && /usr/bin/time -f \"BUILD $name seconds=%e resident_kb=%M exit=%x\" bash build.sh 2>&1 | tail -6 | cut -c1-200"
+  # An entry that didn't build would only give numbers from a dead port.
+  "${SSH[@]}" "test -x entries/$name/bin/server || test -x entries/$name/server" || { echo "NOT BUILT $name"; exit 1; }
 done
 "${SSH[@]}" 'df -h / | tail -1; free -m | head -2'
