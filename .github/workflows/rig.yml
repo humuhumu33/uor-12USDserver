@@ -60,23 +60,6 @@ jobs:
           cp -r server/. "$RUNNER_TEMP/challenge/submissions/ours-under-test/"
           cd "$RUNNER_TEMP/challenge"
           bash test/run.sh submissions/ours-under-test 2>&1 | tail -40
-      - name: Build both read paths, logging every second
-        timeout-minutes: 15
-        shell: bash
-        run: |
-          # The commit before the multishot receive, so the two differ only in how requests are read.
-          git worktree add -q /tmp/poll e3e97f72051fe443ac3cdea9f743b23906f0c15d
-          mkdir -p /tmp/variants
-          cp -r /tmp/poll/server /tmp/variants/v-poll
-          cp -r server /tmp/variants/v-multishot
-          sed -i 's/define CHECKPOINT_NICE 10/define CHECKPOINT_NICE 19/; s/cache_size = -8192/cache_size = -32768/' /tmp/variants/v-poll/src/server.c
-          grep -q 'define CHECKPOINT_NICE 19' /tmp/variants/v-poll/src/server.c
-          grep -q 'cache_size = -32768' /tmp/variants/v-poll/src/server.c
-          for v in v-poll v-multishot; do
-            sed -i 's/next_stats = now_seconds + 10;/next_stats = now_seconds + 1;/' "/tmp/variants/$v/src/server.c"
-            grep -q 'next_stats = now_seconds + 1;' "/tmp/variants/$v/src/server.c"
-            bash "/tmp/variants/$v/build.sh" 2>&1 | tail -1
-          done
       - name: Build the control
         shell: bash
         run: |
@@ -91,18 +74,8 @@ jobs:
           echo "RUNNER $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2) kernel=$(uname -r)"
           # Near the limit, interleaved so drift on this machine hits both servers.
           # 73%: the quota at which the control spends the same share here at 295k as on the box (59% against 81%).
-          # Saturation is where servers died, and runners differ. So measure what this CPU needs uncapped, then cap just under it.
-          users=320000
-          echo "=== calibrate v-multishot at $users users, no cap"
-          bash rig/measure.sh v-multishot "$users" 90 150 "$RUNNER_TEMP/challenge" "$PWD/rig" | tee /tmp/calibrate.txt | grep -E 'RESULT|LOAD |SERVER DIED'
-          needed=$(sed -nE 's/.*cpu_pct=([0-9]+).*/\1/p' /tmp/calibrate.txt | tail -1)
-          [ -n "$needed" ] || { echo "no calibration"; exit 1; }
-          # Five points under what it used uncapped, so it saturates. A rival process instead of a quota: see measure.sh.
-          export CPU_SHARE="$((needed - 5))"
-          echo "CALIBRATED needed=$needed share=$CPU_SHARE"
-          for run in "v-multishot 320000" "control 320000" "v-multishot 340000" "control 340000" "v-multishot 320000" "control 320000" "v-multishot 340000" "control 340000"; do
-            read -r server users <<< "$run"
-            echo "=== $server at $users users"
-            bash rig/measure.sh "$server" "$users" 90 150 "$RUNNER_TEMP/challenge" "$PWD/rig"
-            sleep 3
+          # One run of each with no limit, as a check on the commit. Comparisons get their own jobs.
+          for server in ours control; do
+            echo "=== $server at 320000 users"
+            bash rig/measure.sh "$server" 320000 90 150 "$RUNNER_TEMP/challenge" "$PWD/rig"
           done

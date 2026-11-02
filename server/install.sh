@@ -3,4 +3,4 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq
-apt-get install -y -qq build-essential curl ca-certificates unzip liburing-dev > /dev/null
+apt-get install -y -qq build-essential curl ca-certificates unzip liburing-dev=2.5-1build1 > /dev/null
