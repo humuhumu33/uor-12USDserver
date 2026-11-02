@@ -91,11 +91,15 @@ jobs:
           echo "RUNNER $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2) kernel=$(uname -r)"
           # Near the limit, interleaved so drift on this machine hits both servers.
           # 73%: the quota at which the control spends the same share here at 295k as on the box (59% against 81%).
-          # Saturation is where servers died, and a lower quota reaches it whichever CPU this runner has.
-          export CPU_QUOTA=60%
-          # The box's kernel costs more per socket than this one, so its memory wall comes sooner than these loads suggest.
-          for run in "v-multishot 320000" "v-poll 320000" "control 320000" "v-multishot 320000" "v-poll 320000" "control 320000" "v-multishot 320000" "v-poll 320000" "control 320000"; do
-            read -r server users <<< "$run"
+          # Saturation is where servers died, and runners differ. So measure what this CPU needs uncapped, then cap just under it.
+          users=320000
+          echo "=== calibrate v-multishot at $users users, no cap"
+          bash rig/measure.sh v-multishot "$users" 90 150 "$RUNNER_TEMP/challenge" "$PWD/rig" | tee /tmp/calibrate.txt | grep -E 'RESULT|LOAD |SERVER DIED'
+          needed=$(sed -nE 's/.*cpu_pct=([0-9]+).*/\1/p' /tmp/calibrate.txt | tail -1)
+          [ -n "$needed" ] || { echo "no calibration"; exit 1; }
+          export CPU_QUOTA="$((needed - 1))%"
+          echo "CALIBRATED needed=$needed quota=$CPU_QUOTA"
+          for server in v-multishot v-poll v-multishot v-poll v-multishot v-poll; do
             echo "=== $server at $users users"
             bash rig/measure.sh "$server" "$users" 90 150 "$RUNNER_TEMP/challenge" "$PWD/rig"
           done
