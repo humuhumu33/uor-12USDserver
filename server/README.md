@@ -73,7 +73,7 @@ Measured in a guest shaped like the box: 1 vCPU, 1,967 MB, no swap, Ubuntu 24.04
 | 310,000 | held, p99 5.9 ms | held, p99 97 ms |
 | 320,000 | held, p99 194 ms | **killed by out-of-memory**, twice |
 
-Every run that finished had 0 errors. Against c-iouring-pavlyhalim (#245) in the same guest and runs, the two were level on latency from 280,000 to 310,000. On the 9V74 host at 320,000, ours was killed and #245 collapsed to a p95 of 26 s without dying, so both fail a hold there. Ours used 30-500 MB less memory at its peak.
+Every run that finished had 0 errors. Against c-iouring-pavlyhalim (#245), run in the same guest right after ours, latency was level in three of the four paired runs at 300,000 and above. In the first 9V74 run ours was worse at 300,000 (p99 363 ms against 115 ms). On the 9V74 host at 320,000, ours was killed and #245 collapsed to a p95 of 26 s without dying, so both fail a hold there. Ours used 6-500 MB less memory at its peak, in every pair.
 
 The kill at 320,000 is the main open risk. Past what the CPU can serve, requests pile up in sockets at about 130 MB a second, and the server itself holds only about 125 MB when it is killed. Whether the real box behaves like the faster host or the slower one is unknown.
 
