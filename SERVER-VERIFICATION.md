@@ -68,4 +68,4 @@ Found by an independent audit and not closed:
 - The order in `AGENTS.md` wasn't followed for this suite: `server.c` predates the model and tests (R3).
 - `build.sh` skips the Lean steps where there is no `lean/`, the path `rig.yml` uses. The submitted folder always has it.
 - It has run on Ubuntu's 6.8 only in a guest on GitHub's runners, not on the benchmark's droplet. On 6.8 a request can pin later socket closes until it ends, which is untested under connection churn.
-- In that guest, on one host, the server was killed by out-of-memory at 320,000 users: past what the CPU can serve, requests pile up in sockets at about 130 MB a second. It wasn't reproduced on a faster host, and one loop stall of 1.4 s seen under an emulated quota on a slower one has no explanation.
+- In that guest, on the EPYC 9V74 host, the server was killed by out-of-memory at 320,000 users in both runs: past what the CPU can serve, requests pile up in sockets at about 130 MB a second. It held 320,000 on the EPYC 9V45 host. One loop stall of 1.4 s seen under an emulated quota on a slower runner has no explanation.

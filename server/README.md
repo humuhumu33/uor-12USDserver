@@ -64,19 +64,18 @@ Built on what earlier entries published, under MIT: the B-tree seek and record d
 
 No user-count score is claimed. The organiser's benchmark is the only score.
 
-Measured in a guest shaped like the box: 1 vCPU, 1,967 MB, no swap, Ubuntu 24.04 on kernel 6.8.0-147, installed and built inside the guest, on GitHub's runners, with a replay of the `bench/load.js` user model on the host across a virtio network device. That method follows #278. The build there took 69-116 s and 1.44 GB at its peak. The holds were 2 minutes with a 60 s ramp, one run per load, so the differences between them are mostly noise.
+Measured in a guest shaped like the box: 1 vCPU, 1,967 MB, no swap, Ubuntu 24.04 on kernel 6.8.0-147, with the entry installed and built inside the guest, on GitHub's runners. A replay of the `bench/load.js` user model runs on the host across a virtio network device, as in #278. The build in the guest took 69-116 s and 1.44 GB at its peak. Each step was a 60 s ramp and a 2-minute hold, one run per load, on a freshly booted guest. The runner's host CPU changes the result a great deal, so both hosts are shown.
 
-| Host CPU | Users | p95 | p99 | Errors | Outcome |
-|---|---:|---:|---:|---:|---|
-| EPYC 9V45 | 280,000 | 4.4 ms | 5.8 ms | 0 | held |
-| EPYC 9V45 | 300,000 | 4.5 ms | 6.2 ms | 0 | held |
-| EPYC 9V45 | 310,000 | 4.7 ms | 5.9 ms | 0 | held |
-| EPYC 9V45 | 320,000 | 6.6 ms | 194 ms | 0 | held |
-| EPYC 9V74 | 250,000 | 11 ms | 85 ms | 0 | held |
-| EPYC 9V74 | 300,000 | 66 ms | 363 ms | 0 | held |
-| EPYC 9V74 | 320,000 | | | | **killed by out-of-memory** |
+| Users | EPYC 9V45 host | EPYC 9V74 host, two runs |
+|---:|---|---|
+| 280,000 | held, p99 5.8 ms | held, p99 8.7 ms |
+| 300,000 | held, p99 6.2 ms | held, p99 363 and 45 ms |
+| 310,000 | held, p99 5.9 ms | held, p99 97 ms |
+| 320,000 | held, p99 194 ms | **killed by out-of-memory**, twice |
 
-The second table's host is the closer guide to the box, and the kill is the honest result at that load there: past what the CPU can serve, requests pile up in sockets until memory runs out. These runs say little about the box's limit, since the host's CPU moves it a lot: c-iouring-pavlyhalim also held 320,000 on the first host and collapsed there on the second, where it had already been damaged by the kill.
+Every run that finished had 0 errors. Against c-iouring-pavlyhalim (#245) in the same guest and runs, the two were level on latency from 280,000 to 310,000. On the 9V74 host at 320,000, ours was killed and #245 collapsed to a p95 of 26 s without dying, so both fail a hold there. Ours used 30-500 MB less memory at its peak.
+
+The kill at 320,000 is the main open risk. Past what the CPU can serve, requests pile up in sockets at about 130 MB a second, and the server itself holds only about 125 MB when it is killed. Whether the real box behaves like the faster host or the slower one is unknown.
 
 ## Run
 
